@@ -204,8 +204,8 @@ fun GitControlTab(
             RemotesAndSettingsCard(
                 remotes = state.remotes,
                 status = status,
-                hasProjectCredentials = state.projectCredentials != null,
-                hasDefaultCredentials = state.hasDefaultCredentials,
+                hasProjectCredentials = state.repoCredentials != null,
+                hasDefaultCredentials = state.hasFallbackCredentials,
                 onAddRemoteClick = { showAddRemoteDialog = true },
                 onEditRemoteClick = { remoteToEdit = it },
                 onDeleteRemoteClick = { remoteToDelete = it },
@@ -947,8 +947,8 @@ private fun RemotesAndSettingsCard(
                     Text("Токен доступа (PAT / пароль)", style = MaterialTheme.typography.bodyLarge)
                     Text(
                         text = when {
-                            hasProjectCredentials -> "Задан отдельный токен для проекта"
-                            hasDefaultCredentials -> "Используется токен по умолчанию"
+                            hasProjectCredentials -> "Задан отдельный токен репозитория"
+                            hasDefaultCredentials -> "Используется токен проекта или по умолчанию"
                             else -> "Не задан (только публичное чтение)"
                         },
                         style = MaterialTheme.typography.labelMedium,

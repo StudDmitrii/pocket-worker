@@ -1,6 +1,8 @@
 package com.pocketworker.app.core.storage
 
-import com.pocketworker.app.core.git.ProjectEntry
+import com.pocketworker.app.core.git.RepoEntry
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,36 +34,88 @@ class ProjectRegistryTest {
     }
 
     @Test
-    fun `register update discover and delete project`() {
-        val (id1, dir1) = registry.allocateProjectDir("My App")
-        dir1.mkdirs()
-        registry.registerProject(
-            ProjectEntry(
-                id = id1,
-                name = "My App",
-                directoryPath = dir1.absolutePath,
+    fun `create project and manage multiple repositories inside it`() {
+        val project = registry.createProject("E-Commerce", "Client, Backend, Admin")
+        assertTrue(File(project.directoryPath).exists())
+
+        val (clientId, clientDir) = registry.allocateRepositoryDir(project.id, "client")
+        clientDir.mkdirs()
+        registry.registerRepository(
+            RepoEntry(
+                id = clientId,
+                projectId = project.id,
+                name = "client",
+                directoryPath = clientDir.absolutePath,
                 createdAt = 100L,
-                remoteUrl = "https://github.com/test/app.git"
+                remoteUrl = "https://github.com/org/client.git"
             )
         )
 
-        val (id2, dir2) = registry.allocateProjectDir("My App")
-        assertNotEquals(dir1.absolutePath, dir2.absolutePath)
+        val (backendId, backendDir) = registry.allocateRepositoryDir(project.id, "backend")
+        backendDir.mkdirs()
+        registry.registerRepository(
+            RepoEntry(
+                id = backendId,
+                projectId = project.id,
+                name = "backend",
+                directoryPath = backendDir.absolutePath,
+                createdAt = 200L,
+                remoteUrl = "https://github.com/org/backend.git"
+            )
+        )
 
-        // Untracked folder on disk gets discovered automatically
-        val extraDir = File(registry.projectsRootDir, "discovered-repo").apply { mkdirs() }
+        val (_, duplicateDir) = registry.allocateRepositoryDir(project.id, "client")
+        assertNotEquals(clientDir.absolutePath, duplicateDir.absolutePath)
 
-        val list = registry.listProjects()
-        assertEquals(2, list.size)
-        assertTrue(list.any { it.id == id1 && it.remoteUrl == "https://github.com/test/app.git" })
-        assertTrue(list.any { it.directoryPath == extraDir.absolutePath })
+        // Untracked folder dropped directly inside project directory gets discovered automatically
+        val servicesDir = File(project.directoryPath, "services").apply { mkdirs() }
 
-        registry.updateRemoteUrl(id1, "https://github.com/test/app-new.git")
-        assertEquals("https://github.com/test/app-new.git", registry.findById(id1)?.remoteUrl)
+        val repos = registry.listRepositories(project.id)
+        assertEquals(3, repos.size)
+        assertTrue(repos.any { it.id == clientId && it.remoteUrl == "https://github.com/org/client.git" })
+        assertTrue(repos.any { it.id == backendId })
+        assertTrue(repos.any { it.directoryPath == servicesDir.absolutePath })
 
-        registry.deleteProject(id1, deleteFilesOnDisk = true)
-        assertNull(registry.findById(id1))
-        assertFalse(dir1.exists())
-        assertFalse(id2.isEmpty())
+        registry.updateRepositoryRemoteUrl(project.id, clientId, "https://github.com/org/client-v2.git")
+        assertEquals(
+            "https://github.com/org/client-v2.git",
+            registry.findRepository(project.id, clientId)?.remoteUrl
+        )
+
+        registry.deleteRepository(project.id, clientId, deleteFilesOnDisk = true)
+        assertNull(registry.findRepository(project.id, clientId))
+        assertFalse(clientDir.exists())
+
+        val deletedIds = registry.deleteProject(project.id, deleteFilesOnDisk = true)
+        assertTrue(backendId in deletedIds)
+        assertNull(registry.findProjectById(project.id))
+        assertFalse(File(project.directoryPath).exists())
+    }
+
+    @Test
+    fun `legacy v1 flat json migrates into workspace project wrapper`() {
+        val oldRepoDir = File(registry.projectsRootDir, "legacy-repo").apply {
+            mkdirs()
+            File(this, ".git").mkdirs()
+        }
+        val legacyArray = JSONArray().put(
+            JSONObject().apply {
+                put("id", "old-1")
+                put("name", "LegacyRepo")
+                put("directoryPath", oldRepoDir.absolutePath)
+                put("createdAt", 500L)
+                put("remoteUrl", "https://github.com/test/legacy.git")
+            }
+        )
+        File(tempRoot, "projects.json").writeText(legacyArray.toString())
+
+        val projects = registry.listProjects()
+        assertEquals(1, projects.size)
+        val project = projects.first()
+        val repos = registry.listRepositories(project.id)
+        assertEquals(1, repos.size)
+        assertEquals("old-1", repos.first().id)
+        assertEquals("https://github.com/test/legacy.git", repos.first().remoteUrl)
+        assertTrue(File(repos.first().directoryPath, ".git").exists())
     }
 }

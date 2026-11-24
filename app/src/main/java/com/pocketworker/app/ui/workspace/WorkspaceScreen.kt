@@ -87,40 +87,54 @@ fun WorkspaceScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBackToProjects) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К проектам")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К репозиториям проекта")
                     }
                 },
                 title = {
                     Column {
                         Text(
-                            text = state.project?.name ?: "Проект",
+                            text = state.project?.name ?: "Репозиторий",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         val branch = state.gitStatus?.currentBranch
-                        if (state.gitStatus?.isGitRepo == true && branch != null) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = MaterialTheme.shapes.extraSmall,
-                                modifier = Modifier.clickable { viewModel.setActiveTab(WorkspaceTab.GIT) }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (state.parentProjectName.isNotBlank()) {
+                                Text(
+                                    text = state.parentProjectName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (state.gitStatus?.isGitRepo == true && branch != null) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                            }
+                            if (state.gitStatus?.isGitRepo == true && branch != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = MaterialTheme.shapes.extraSmall,
+                                    modifier = Modifier.clickable { viewModel.setActiveTab(WorkspaceTab.GIT) }
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.AccountTree,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = branch,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AccountTree,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = branch,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -266,10 +280,10 @@ fun WorkspaceScreen(
 
     if (showCredentialsDialog) {
         ProjectCredentialsDialog(
-            currentCredentials = state.projectCredentials,
-            hasDefaultCredentials = state.hasDefaultCredentials,
+            currentCredentials = state.repoCredentials,
+            hasDefaultCredentials = state.hasFallbackCredentials,
             onDismiss = { showCredentialsDialog = false },
-            onSave = viewModel::saveProjectCredentials
+            onSave = viewModel::saveRepoCredentials
         )
     }
 

@@ -15,6 +15,10 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 interface CredentialStore {
+    fun getRepoCredentials(repoId: String): GitCredentials?
+    fun saveRepoCredentials(repoId: String, credentials: GitCredentials)
+    fun removeRepoCredentials(repoId: String)
+
     fun getProjectCredentials(projectId: String): GitCredentials?
     fun saveProjectCredentials(projectId: String, credentials: GitCredentials)
     fun removeProjectCredentials(projectId: String)
@@ -22,11 +26,28 @@ interface CredentialStore {
     fun getDefaultCredentials(): GitCredentials?
     fun saveDefaultCredentials(credentials: GitCredentials)
     fun clearDefaultCredentials()
+
+    fun resolveForRepo(projectId: String, repoId: String?): GitCredentials? {
+        return repoId?.let { getRepoCredentials(it) }
+            ?: getProjectCredentials(projectId)
+            ?: getDefaultCredentials()
+    }
 }
 
 class InMemoryCredentialStore : CredentialStore {
+    private val byRepo = mutableMapOf<String, GitCredentials>()
     private val byProject = mutableMapOf<String, GitCredentials>()
     private var defaultCreds: GitCredentials? = null
+
+    override fun getRepoCredentials(repoId: String): GitCredentials? = byRepo[repoId]
+
+    override fun saveRepoCredentials(repoId: String, credentials: GitCredentials) {
+        byRepo[repoId] = credentials
+    }
+
+    override fun removeRepoCredentials(repoId: String) {
+        byRepo.remove(repoId)
+    }
 
     override fun getProjectCredentials(projectId: String): GitCredentials? = byProject[projectId]
 
@@ -55,6 +76,22 @@ class KeystoreCredentialStore(context: Context) : CredentialStore {
         PREFS_NAME,
         Context.MODE_PRIVATE
     )
+
+    override fun getRepoCredentials(repoId: String): GitCredentials? {
+        return readEncrypted(KEY_REPO_PREFIX + repoId)
+    }
+
+    override fun saveRepoCredentials(repoId: String, credentials: GitCredentials) {
+        if (credentials.tokenOrPassword.isBlank()) {
+            removeRepoCredentials(repoId)
+            return
+        }
+        writeEncrypted(KEY_REPO_PREFIX + repoId, credentials)
+    }
+
+    override fun removeRepoCredentials(repoId: String) {
+        prefs.edit().remove(KEY_REPO_PREFIX + repoId).apply()
+    }
 
     override fun getProjectCredentials(projectId: String): GitCredentials? {
         return readEncrypted(KEY_PROJECT_PREFIX + projectId)
@@ -154,6 +191,7 @@ class KeystoreCredentialStore(context: Context) : CredentialStore {
         private const val PREFS_NAME = "pocket_worker_credentials"
         private const val KEY_DEFAULT = "default_git_credentials"
         private const val KEY_PROJECT_PREFIX = "project_creds_"
+        private const val KEY_REPO_PREFIX = "repo_creds_"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "pocket_worker_git_creds_key"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"

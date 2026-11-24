@@ -1,15 +1,31 @@
 package com.pocketworker.app.core.git
 
-data class ProjectEntry(
+data class WorkspaceProject(
     val id: String,
+    val name: String,
+    val directoryPath: String,
+    val createdAt: Long,
+    val description: String = ""
+)
+
+data class ProjectSummary(
+    val project: WorkspaceProject,
+    val repoCount: Int,
+    val repoNamesPreview: List<String>,
+    val dirtyRepoCount: Int
+)
+
+data class RepoEntry(
+    val id: String,
+    val projectId: String,
     val name: String,
     val directoryPath: String,
     val createdAt: Long,
     val remoteUrl: String? = null
 )
 
-data class ProjectCardInfo(
-    val entry: ProjectEntry,
+data class RepoCardInfo(
+    val entry: RepoEntry,
     val isGitRepo: Boolean,
     val currentBranch: String?,
     val isUnborn: Boolean,

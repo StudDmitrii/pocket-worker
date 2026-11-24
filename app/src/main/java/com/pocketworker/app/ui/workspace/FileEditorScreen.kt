@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketworker.app.ui.common.formatFileSize
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

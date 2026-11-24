@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.ProjectFileItem
+import com.pocketworker.app.ui.common.formatFileSize
 
 @Composable
 fun FilesTab(
@@ -425,12 +426,4 @@ private fun SingleNameInputDialog(
             TextButton(onClick = onDismiss) { Text("Отмена") }
         }
     )
-}
-
-fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "$bytes Б"
-        bytes < 1024 * 1024 -> "${bytes / 1024} КБ"
-        else -> String.format("%.1f МБ", bytes / (1024f * 1024f))
-    }
 }

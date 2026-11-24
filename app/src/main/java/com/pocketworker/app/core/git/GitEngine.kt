@@ -31,7 +31,7 @@ interface GitEngine {
         initialBranch: String = "main"
     )
 
-    fun getProjectSummary(entry: ProjectEntry): ProjectCardInfo
+    fun getRepoSummary(entry: RepoEntry): RepoCardInfo
 
     fun getStatus(repoDir: File): GitStatusSummary
 

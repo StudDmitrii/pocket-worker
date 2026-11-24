@@ -1,4 +1,4 @@
-package com.pocketworker.app.ui.projects
+package com.pocketworker.app.ui.projectdetail
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Cloud
@@ -50,28 +51,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.pocketworker.app.core.git.ProjectCardInfo
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.pocketworker.app.core.git.RepoCardInfo
+import com.pocketworker.app.ui.common.CredentialsEditorDialog
+import com.pocketworker.app.ui.common.OnLifecycleResume
+import com.pocketworker.app.ui.common.formatShortTimestamp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectsScreen(
-    viewModel: ProjectsViewModel,
-    onOpenProject: (String) -> Unit
+fun ProjectDetailScreen(
+    viewModel: ProjectDetailViewModel,
+    onBack: () -> Unit,
+    onOpenRepo: (repoId: String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var showAddChoiceSheet by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
-    var showCreateDialog by remember { mutableStateOf(false) }
+    var showCreateRepoDialog by remember { mutableStateOf(false) }
     var showCredentialsDialog by remember { mutableStateOf(false) }
-    var projectToDelete by remember { mutableStateOf<ProjectCardInfo?>(null) }
+    var repoToDelete by remember { mutableStateOf<RepoCardInfo?>(null) }
+
+    OnLifecycleResume {
+        viewModel.refresh()
+    }
 
     LaunchedEffect(state.errorMessage, state.infoMessage) {
         val msg = state.errorMessage ?: state.infoMessage
@@ -84,11 +89,20 @@ fun ProjectsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К проектам")
+                    }
+                },
                 title = {
                     Column {
-                        Text("PocketWorker", fontWeight = FontWeight.Bold)
                         Text(
-                            text = "Локальные проекты и Git",
+                            text = state.project?.name ?: "Проект",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Репозитории (${state.repos.size})",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -96,10 +110,10 @@ fun ProjectsScreen(
                 },
                 actions = {
                     IconButton(onClick = { showCredentialsDialog = true }) {
-                        Icon(Icons.Rounded.Key, contentDescription = "Токен Git по умолчанию")
+                        Icon(Icons.Rounded.Key, contentDescription = "Токен проекта")
                     }
-                    IconButton(onClick = { viewModel.refreshProjects() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Обновить список")
+                    IconButton(onClick = { viewModel.refresh() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Обновить")
                     }
                 }
             )
@@ -108,7 +122,7 @@ fun ProjectsScreen(
             ExtendedFloatingActionButton(
                 onClick = { showAddChoiceSheet = true },
                 icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("Добавить проект") }
+                text = { Text("Добавить репозиторий") }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -119,11 +133,12 @@ fun ProjectsScreen(
                 .padding(padding)
         ) {
             when {
-                state.isLoading && state.projects.isEmpty() -> {
+                state.isLoading && state.repos.isEmpty() -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
-                state.projects.isEmpty() -> {
-                    EmptyProjectsPlaceholder(
+                state.repos.isEmpty() -> {
+                    EmptyReposPlaceholder(
+                        projectName = state.project?.name ?: "проекте",
                         onAddClick = { showAddChoiceSheet = true },
                         modifier = Modifier.align(Alignment.Center)
                     )
@@ -138,11 +153,11 @@ fun ProjectsScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(state.projects, key = { it.entry.id }) { card ->
-                            ProjectCard(
+                        items(state.repos, key = { it.entry.id }) { card ->
+                            RepoCard(
                                 info = card,
-                                onClick = { onOpenProject(card.entry.id) },
-                                onDeleteClick = { projectToDelete = card }
+                                onClick = { onOpenRepo(card.entry.id) },
+                                onDeleteClick = { repoToDelete = card }
                             )
                         }
                     }
@@ -152,59 +167,72 @@ fun ProjectsScreen(
     }
 
     if (showAddChoiceSheet) {
-        AddProjectChoiceSheet(
+        AddRepoChoiceSheet(
             onDismiss = { showAddChoiceSheet = false },
             onConnectClick = {
                 showAddChoiceSheet = false
+                viewModel.clearCloneError()
                 showCloneDialog = true
             },
             onCreateClick = {
                 showAddChoiceSheet = false
-                showCreateDialog = true
+                viewModel.clearCreateRepoError()
+                showCreateRepoDialog = true
             }
         )
     }
 
     if (showCloneDialog) {
-        CloneProjectDialog(
+        CloneRepoDialog(
             isCloning = state.isCloning,
             cloneProgress = state.cloneProgress,
-            defaultCredentials = state.defaultCredentials,
-            onDismiss = { showCloneDialog = false },
+            errorMessage = state.cloneError,
+            fallbackCredentials = state.projectCredentials ?: state.defaultCredentials,
+            onClearError = { viewModel.clearCloneError() },
+            onDismiss = {
+                viewModel.clearCloneError()
+                showCloneDialog = false
+            },
             onCancelClone = { viewModel.cancelClone() },
-            onClone = { url, name, branch, user, token, saveCreds ->
-                viewModel.cloneProject(
+            onClone = { url, name, branch, useAuth, user, token, saveCreds ->
+                viewModel.cloneRepository(
                     url = url,
                     customName = name,
                     branch = branch,
+                    useAuth = useAuth,
                     username = user,
                     token = token,
-                    saveCredentialsForProject = saveCreds,
-                    onSuccess = { projectId ->
+                    saveCredentialsForRepo = saveCreds,
+                    onSuccess = { repoId ->
                         showCloneDialog = false
-                        onOpenProject(projectId)
+                        onOpenRepo(repoId)
                     }
                 )
             }
         )
     }
 
-    if (showCreateDialog) {
-        CreateProjectDialog(
-            isCreating = state.isCreating,
-            onDismiss = { showCreateDialog = false },
+    if (showCreateRepoDialog) {
+        CreateRepoDialog(
+            isCreating = state.isCreatingRepo,
+            errorMessage = state.createRepoError,
+            onClearError = { viewModel.clearCreateRepoError() },
+            onDismiss = {
+                viewModel.clearCreateRepoError()
+                showCreateRepoDialog = false
+            },
             onCreate = { name, initGit, branch, readme, remoteUrl, authorName, authorEmail ->
-                viewModel.createEmptyProject(
-                    projectName = name,
+                viewModel.createEmptyRepository(
+                    repoName = name,
                     initGit = initGit,
                     initialBranch = branch,
                     createReadmeAndCommit = readme,
                     remoteUrl = remoteUrl,
                     authorName = authorName,
                     authorEmail = authorEmail,
-                    onSuccess = { projectId ->
-                        showCreateDialog = false
-                        onOpenProject(projectId)
+                    onSuccess = { repoId ->
+                        showCreateRepoDialog = false
+                        onOpenRepo(repoId)
                     }
                 )
             }
@@ -212,25 +240,27 @@ fun ProjectsScreen(
     }
 
     if (showCredentialsDialog) {
-        DefaultCredentialsDialog(
-            currentCredentials = state.defaultCredentials,
+        CredentialsEditorDialog(
+            title = "Токен проекта",
+            description = "Общий токен для всех репозиториев проекта «${state.project?.name ?: ""}». Используется, если у конкретного репозитория не задан свой токен.",
+            currentCredentials = state.projectCredentials,
             onDismiss = { showCredentialsDialog = false },
-            onSave = { user, token -> viewModel.saveDefaultCredentials(user, token) }
+            onSave = { user, token -> viewModel.saveProjectCredentials(user, token) }
         )
     }
 
-    projectToDelete?.let { card ->
+    repoToDelete?.let { card ->
         AlertDialog(
-            onDismissRequest = { projectToDelete = null },
-            title = { Text("Удалить проект?") },
+            onDismissRequest = { repoToDelete = null },
+            title = { Text("Удалить репозиторий «${card.entry.name}»?") },
             text = {
-                Text("Локальная папка проекта «${card.entry.name}» и вся история на устройстве будут удалены. Удалённый репозиторий в облаке не пострадает.")
+                Text("Локальная папка репозитория и его история на устройстве будут удалены. Удалённый репозиторий в облаке не пострадает.")
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteProject(card.entry.id)
-                        projectToDelete = null
+                        viewModel.deleteRepository(card.entry.id)
+                        repoToDelete = null
                     },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
@@ -240,7 +270,7 @@ fun ProjectsScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { projectToDelete = null }) {
+                TextButton(onClick = { repoToDelete = null }) {
                     Text("Отмена")
                 }
             }
@@ -249,7 +279,8 @@ fun ProjectsScreen(
 }
 
 @Composable
-private fun EmptyProjectsPlaceholder(
+private fun EmptyReposPlaceholder(
+    projectName: String,
     onAddClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -265,11 +296,11 @@ private fun EmptyProjectsPlaceholder(
             modifier = Modifier.size(64.dp)
         )
         Text(
-            text = "Пока нет проектов",
+            text = "В проекте «$projectName» пока пусто",
             style = MaterialTheme.typography.titleLarge
         )
         Text(
-            text = "Нажмите «Добавить проект», чтобы клонировать репозиторий по ссылке или создать новый пустой проект.",
+            text = "Добавьте сюда репозитории (например, client, backend, admin, services): клонируйте по Git-ссылке или создайте новый.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -277,14 +308,14 @@ private fun EmptyProjectsPlaceholder(
         TextButton(onClick = onAddClick) {
             Icon(Icons.Rounded.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Добавить проект")
+            Text("Добавить репозиторий")
         }
     }
 }
 
 @Composable
-private fun ProjectCard(
-    info: ProjectCardInfo,
+private fun RepoCard(
+    info: RepoCardInfo,
     onClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -292,9 +323,7 @@ private fun ProjectCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
@@ -326,7 +355,7 @@ private fun ProjectCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.DeleteOutline,
-                        contentDescription = "Удалить проект",
+                        contentDescription = "Удалить репозиторий",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -394,7 +423,7 @@ private fun ProjectCard(
                 }
             } else {
                 Text(
-                    text = "Без Git (можно инициализировать внутри проекта)",
+                    text = "Без Git (можно инициализировать внутри)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -452,9 +481,4 @@ private fun ProjectCard(
             }
         }
     }
-}
-
-fun formatShortTimestamp(timestampMillis: Long): String {
-    val sdf = SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
-    return sdf.format(Date(timestampMillis))
 }

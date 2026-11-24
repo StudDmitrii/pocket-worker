@@ -60,7 +60,7 @@ import com.pocketworker.app.core.git.CommitDetail
 import com.pocketworker.app.core.git.FileChangeType
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitRemote
-import com.pocketworker.app.ui.projects.formatShortTimestamp
+import com.pocketworker.app.ui.common.formatShortTimestamp
 import com.pocketworker.app.ui.theme.GitSemanticColors
 
 @Composable
@@ -429,12 +429,12 @@ fun ProjectCredentialsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Key, contentDescription = null) },
-        title = { Text("Авторизация проекта") },
+        title = { Text("Авторизация репозитория") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = if (hasDefaultCredentials) {
-                        "Оставьте поле токена пустым, чтобы использовать токен по умолчанию."
+                        "Оставьте поле токена пустым, чтобы использовать токен проекта или токен по умолчанию."
                     } else {
                         "Укажите логин и Personal Access Token (PAT) для fetch, pull и push."
                     },

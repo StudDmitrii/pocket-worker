@@ -12,11 +12,12 @@ import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.GitRemote
 import com.pocketworker.app.core.git.GitStatusSummary
 import com.pocketworker.app.core.git.GitCommit
-import com.pocketworker.app.core.git.ProjectEntry
 import com.pocketworker.app.core.git.ProjectFileItem
 import com.pocketworker.app.core.git.ProjectFileManager
+import com.pocketworker.app.core.git.RepoEntry
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
+import com.pocketworker.app.ui.common.formatGitTransportError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -48,7 +49,8 @@ data class DiffDialogState(
 )
 
 data class WorkspaceUiState(
-    val project: ProjectEntry? = null,
+    val parentProjectName: String = "",
+    val project: RepoEntry? = null,
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val busyMessage: String? = null,
@@ -66,8 +68,8 @@ data class WorkspaceUiState(
     val gitStatus: GitStatusSummary? = null,
     val branches: List<GitBranch> = emptyList(),
     val remotes: List<GitRemote> = emptyList(),
-    val projectCredentials: GitCredentials? = null,
-    val hasDefaultCredentials: Boolean = false,
+    val repoCredentials: GitCredentials? = null,
+    val hasFallbackCredentials: Boolean = false,
 
     // History tab
     val selectedHistoryRef: String? = null,
@@ -83,6 +85,7 @@ data class WorkspaceUiState(
 
 class WorkspaceViewModel(
     private val projectId: String,
+    private val repoId: String,
     private val gitEngine: GitEngine,
     private val fileManager: ProjectFileManager,
     private val registry: ProjectRegistry,
@@ -105,8 +108,9 @@ class WorkspaceViewModel(
             _uiState.update { it.copy(isLoading = true) }
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val entry = registry.findById(projectId)
-                        ?: throw IllegalStateException("Проект не найден")
+                    val parentProject = registry.findProjectById(projectId)
+                    val entry = registry.findRepository(projectId, repoId)
+                        ?: throw IllegalStateException("Репозиторий не найден")
                     val root = File(entry.directoryPath)
                     val status = gitEngine.getStatus(root)
                     val branches = if (status.isGitRepo) gitEngine.getBranches(root) else emptyList()
@@ -131,10 +135,12 @@ class WorkspaceViewModel(
                     } else {
                         emptyList()
                     }
-                    val projCreds = credentialStore.getProjectCredentials(projectId)
-                    val hasDefaultCreds = credentialStore.getDefaultCredentials() != null
+                    val repoCreds = credentialStore.getRepoCredentials(repoId)
+                    val hasFallbackCreds = credentialStore.getProjectCredentials(projectId) != null ||
+                        credentialStore.getDefaultCredentials() != null
 
                     LoadedWorkspace(
+                        parentProjectName = parentProject?.name ?: "",
                         project = entry,
                         status = status,
                         branches = branches,
@@ -142,8 +148,8 @@ class WorkspaceViewModel(
                         files = files,
                         historyRef = historyRef,
                         commits = commits,
-                        projectCredentials = projCreds,
-                        hasDefaultCredentials = hasDefaultCreds
+                        repoCredentials = repoCreds,
+                        hasFallbackCredentials = hasFallbackCreds
                     )
                 }
             }
@@ -151,6 +157,7 @@ class WorkspaceViewModel(
             result.onSuccess { data ->
                 _uiState.update {
                     it.copy(
+                        parentProjectName = data.parentProjectName,
                         project = data.project,
                         gitStatus = data.status,
                         branches = data.branches,
@@ -159,8 +166,8 @@ class WorkspaceViewModel(
                         selectedHistoryRef = data.historyRef,
                         commits = data.commits,
                         canLoadMoreCommits = data.commits.size >= HISTORY_PAGE_SIZE,
-                        projectCredentials = data.projectCredentials,
-                        hasDefaultCredentials = data.hasDefaultCredentials,
+                        repoCredentials = data.repoCredentials,
+                        hasFallbackCredentials = data.hasFallbackCredentials,
                         isLoading = false
                     )
                 }
@@ -168,7 +175,7 @@ class WorkspaceViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.localizedMessage ?: "Ошибка загрузки проекта"
+                        errorMessage = err.localizedMessage ?: "Ошибка загрузки репозитория"
                     )
                 }
             }
@@ -471,7 +478,7 @@ class WorkspaceViewModel(
         runGitOrFileAction("Добавление remote...") {
             gitEngine.addRemote(File(project.directoryPath), name, url)
             if (name.trim() == "origin") {
-                registry.updateRemoteUrl(projectId, url.trim())
+                registry.updateRepositoryRemoteUrl(projectId, repoId, url.trim())
             }
             "Remote «$name» добавлен"
         }
@@ -482,7 +489,7 @@ class WorkspaceViewModel(
         runGitOrFileAction("Обновление remote...") {
             gitEngine.updateRemoteUrl(File(project.directoryPath), name, newUrl)
             if (name == "origin") {
-                registry.updateRemoteUrl(projectId, newUrl.trim())
+                registry.updateRepositoryRemoteUrl(projectId, repoId, newUrl.trim())
             }
             "URL для «$name» обновлён"
         }
@@ -493,7 +500,7 @@ class WorkspaceViewModel(
         runGitOrFileAction("Удаление remote...") {
             gitEngine.removeRemote(File(project.directoryPath), name)
             if (name == "origin") {
-                registry.updateRemoteUrl(projectId, null)
+                registry.updateRepositoryRemoteUrl(projectId, repoId, null)
             }
             "Remote «$name» удалён"
         }
@@ -524,25 +531,25 @@ class WorkspaceViewModel(
         }
     }
 
-    fun saveProjectCredentials(username: String, token: String) {
+    fun saveRepoCredentials(username: String, token: String) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 if (token.isBlank()) {
-                    credentialStore.removeProjectCredentials(projectId)
+                    credentialStore.removeRepoCredentials(repoId)
                 } else {
-                    credentialStore.saveProjectCredentials(
-                        projectId,
+                    credentialStore.saveRepoCredentials(
+                        repoId,
                         GitCredentials(username.trim(), token.trim())
                     )
                 }
             }
             _uiState.update {
                 it.copy(
-                    projectCredentials = if (token.isBlank()) null else GitCredentials(username.trim(), token.trim()),
+                    repoCredentials = if (token.isBlank()) null else GitCredentials(username.trim(), token.trim()),
                     infoMessage = if (token.isBlank()) {
-                        "Токен проекта удалён (будет использоваться токен по умолчанию)"
+                        "Токен репозитория удалён (будет использоваться токен проекта или по умолчанию)"
                     } else {
-                        "Токен доступа проекта сохранён"
+                        "Токен доступа репозитория сохранён"
                     }
                 )
             }
@@ -702,8 +709,7 @@ class WorkspaceViewModel(
     }
 
     private fun resolveEffectiveCredentials(): GitCredentials? {
-        return credentialStore.getProjectCredentials(projectId)
-            ?: credentialStore.getDefaultCredentials()
+        return credentialStore.resolveForRepo(projectId, repoId)
     }
 
     private fun runGitOrFileAction(
@@ -733,7 +739,7 @@ class WorkspaceViewModel(
                     it.copy(
                         isBusy = false,
                         busyMessage = null,
-                        errorMessage = err.localizedMessage ?: err.javaClass.simpleName
+                        errorMessage = formatGitTransportError(err)
                     )
                 }
             }
@@ -766,15 +772,16 @@ class WorkspaceViewModel(
     }
 
     private data class LoadedWorkspace(
-        val project: ProjectEntry,
+        val parentProjectName: String,
+        val project: RepoEntry,
         val status: GitStatusSummary,
         val branches: List<GitBranch>,
         val remotes: List<GitRemote>,
         val files: List<ProjectFileItem>,
         val historyRef: String?,
         val commits: List<GitCommit>,
-        val projectCredentials: GitCredentials?,
-        val hasDefaultCredentials: Boolean
+        val repoCredentials: GitCredentials?,
+        val hasFallbackCredentials: Boolean
     )
 
     companion object {
@@ -782,6 +789,7 @@ class WorkspaceViewModel(
 
         fun factory(
             projectId: String,
+            repoId: String,
             gitEngine: GitEngine,
             fileManager: ProjectFileManager,
             registry: ProjectRegistry,
@@ -789,7 +797,7 @@ class WorkspaceViewModel(
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return WorkspaceViewModel(projectId, gitEngine, fileManager, registry, credentialStore) as T
+                return WorkspaceViewModel(projectId, repoId, gitEngine, fileManager, registry, credentialStore) as T
             }
         }
     }

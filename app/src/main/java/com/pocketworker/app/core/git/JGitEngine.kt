@@ -165,10 +165,10 @@ class JGitEngine : GitEngine {
             }
     }
 
-    override fun getProjectSummary(entry: ProjectEntry): ProjectCardInfo {
+    override fun getRepoSummary(entry: RepoEntry): RepoCardInfo {
         val dir = File(entry.directoryPath)
         if (!dir.exists()) {
-            return ProjectCardInfo(
+            return RepoCardInfo(
                 entry = entry,
                 isGitRepo = false,
                 currentBranch = null,
@@ -180,11 +180,11 @@ class JGitEngine : GitEngine {
                 lastCommitMessage = null,
                 lastCommitTime = null,
                 remoteUrl = entry.remoteUrl,
-                errorMessage = "Папка проекта не найдена на диске"
+                errorMessage = "Папка репозитория не найдена на диске"
             )
         }
         if (!isGitRepository(dir)) {
-            return ProjectCardInfo(
+            return RepoCardInfo(
                 entry = entry,
                 isGitRepo = false,
                 currentBranch = null,
@@ -208,7 +208,7 @@ class JGitEngine : GitEngine {
                 val changedSet = (status.stagedChanges.map { it.path } +
                     status.unstagedChanges.filter { it.changeType != FileChangeType.UNTRACKED }.map { it.path }).toSet()
                 val untrackedCount = status.unstagedChanges.count { it.changeType == FileChangeType.UNTRACKED }
-                ProjectCardInfo(
+                RepoCardInfo(
                     entry = entry,
                     isGitRepo = true,
                     currentBranch = status.currentBranch,
@@ -223,7 +223,7 @@ class JGitEngine : GitEngine {
                 )
             }
         } catch (t: Throwable) {
-            ProjectCardInfo(
+            RepoCardInfo(
                 entry = entry,
                 isGitRepo = true,
                 currentBranch = null,
