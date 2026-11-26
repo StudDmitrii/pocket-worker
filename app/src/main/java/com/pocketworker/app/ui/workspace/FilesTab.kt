@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,11 +51,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.ProjectFileItem
+import com.pocketworker.app.ui.common.FormFieldShape
+import com.pocketworker.app.ui.common.PocketFormDialog
+import com.pocketworker.app.ui.common.formTextFieldColors
 import com.pocketworker.app.ui.common.formatFileSize
 
 @Composable
@@ -242,6 +247,7 @@ fun FilesTab(
     if (showNewFileDialog) {
         SingleNameInputDialog(
             title = "Новый файл",
+            icon = Icons.AutoMirrored.Rounded.NoteAdd,
             label = "Имя файла (например, notes.md)",
             initialValue = "",
             confirmLabel = "Создать",
@@ -253,6 +259,7 @@ fun FilesTab(
     if (showNewFolderDialog) {
         SingleNameInputDialog(
             title = "Новая папка",
+            icon = Icons.Rounded.CreateNewFolder,
             label = "Имя папки",
             initialValue = "",
             confirmLabel = "Создать",
@@ -264,6 +271,7 @@ fun FilesTab(
     entryToRename?.let { target ->
         SingleNameInputDialog(
             title = "Переименовать",
+            icon = Icons.Rounded.DriveFileRenameOutline,
             label = "Новое имя",
             initialValue = target.name,
             confirmLabel = "Переименовать",
@@ -391,6 +399,7 @@ private fun FileRowItem(
 @Composable
 private fun SingleNameInputDialog(
     title: String,
+    icon: ImageVector,
     label: String,
     initialValue: String,
     confirmLabel: String,
@@ -399,31 +408,33 @@ private fun SingleNameInputDialog(
 ) {
     var text by remember { mutableStateOf(initialValue) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text(label) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
+    PocketFormDialog(
+        title = title,
+        icon = icon,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
             Button(
                 onClick = {
                     onConfirm(text)
                     onDismiss()
                 },
-                enabled = text.isNotBlank()
+                enabled = text.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
             ) {
                 Text(confirmLabel)
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = { Text(label) },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }

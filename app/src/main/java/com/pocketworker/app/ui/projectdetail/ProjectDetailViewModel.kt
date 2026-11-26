@@ -4,10 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.pocketworker.app.core.git.CloneProgress
+import com.pocketworker.app.core.git.DiscoveredRepo
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.HttpRepoGroupDiscoveryService
 import com.pocketworker.app.core.git.RepoCardInfo
 import com.pocketworker.app.core.git.RepoEntry
+import com.pocketworker.app.core.git.RepoGroupDiscoveryService
 import com.pocketworker.app.core.git.WorkspaceProject
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
@@ -23,6 +26,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class DiscoveredRepoItem(
+    val repo: DiscoveredRepo,
+    val selected: Boolean,
+    val alreadyAdded: Boolean
+)
+
 data class ProjectDetailUiState(
     val project: WorkspaceProject? = null,
     val repos: List<RepoCardInfo> = emptyList(),
@@ -30,6 +39,15 @@ data class ProjectDetailUiState(
     val isCloning: Boolean = false,
     val cloneProgress: CloneProgress? = null,
     val cloneError: String? = null,
+    val isDiscoveringGroup: Boolean = false,
+    val groupDiscoveryError: String? = null,
+    val discoveredRepos: List<DiscoveredRepoItem> = emptyList(),
+    val isGroupCloning: Boolean = false,
+    val groupCloneCurrentIndex: Int = 0,
+    val groupCloneTotal: Int = 0,
+    val groupCloneCurrentRepoName: String = "",
+    val groupCloneProgress: CloneProgress? = null,
+    val groupCloneError: String? = null,
     val isCreatingRepo: Boolean = false,
     val createRepoError: String? = null,
     val projectCredentials: GitCredentials? = null,
@@ -43,7 +61,8 @@ class ProjectDetailViewModel(
     private val gitEngine: GitEngine,
     private val registry: ProjectRegistry,
     private val credentialStore: CredentialStore,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProjectDetailUiState())
@@ -51,6 +70,8 @@ class ProjectDetailViewModel(
 
     private var cloneJob: Job? = null
     private var cloneCancelFlag = AtomicBoolean(false)
+    private var groupJob: Job? = null
+    private var groupCancelFlag = AtomicBoolean(false)
 
     init {
         refresh()
@@ -119,41 +140,24 @@ class ProjectDetailViewModel(
                 )
             }
 
-            val creds = when {
-                useAuth && token.isNotBlank() -> GitCredentials(username.trim(), token.trim())
-                useAuth -> credentialStore.resolveForRepo(projectId, null)
-                else -> null
-            }
+            val creds = resolveCloneCredentials(useAuth, username, token)
 
             val outcome = withContext(ioDispatcher) {
                 runCatching {
-                    val (repoId, targetDir) = registry.allocateRepositoryDir(projectId, derivedName)
-                    gitEngine.cloneRepository(
+                    cloneAndRegisterSingleRepo(
                         url = cleanUrl,
-                        targetDir = targetDir,
+                        repoName = derivedName,
                         branch = branch.trim().ifEmpty { null },
                         credentials = creds,
+                        saveCredentialsForRepo = useAuth && saveCredentialsForRepo && token.isNotBlank(),
+                        savedCredentialsToStore = if (useAuth && token.isNotBlank()) {
+                            GitCredentials(username.trim(), token.trim())
+                        } else null,
                         onProgress = { progress ->
                             _uiState.update { state -> state.copy(cloneProgress = progress) }
                         },
                         isCancelled = { cloneCancelFlag.get() }
                     )
-                    val entry = RepoEntry(
-                        id = repoId,
-                        projectId = projectId,
-                        name = derivedName,
-                        directoryPath = targetDir.absolutePath,
-                        createdAt = System.currentTimeMillis(),
-                        remoteUrl = cleanUrl
-                    )
-                    registry.registerRepository(entry)
-                    if (useAuth && saveCredentialsForRepo && token.isNotBlank()) {
-                        credentialStore.saveRepoCredentials(
-                            repoId,
-                            GitCredentials(username.trim(), token.trim())
-                        )
-                    }
-                    entry.id
                 }
             }
 
@@ -192,6 +196,278 @@ class ProjectDetailViewModel(
 
     fun clearCloneError() {
         _uiState.update { it.copy(cloneError = null) }
+    }
+
+    fun discoverGroupRepositories(
+        url: String,
+        useAuth: Boolean,
+        username: String,
+        token: String
+    ) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isEmpty()) {
+            _uiState.update { it.copy(groupDiscoveryError = "Укажите ссылку на группу GitLab или профиль/организацию GitHub") }
+            return
+        }
+
+        groupJob?.cancel()
+        groupJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isDiscoveringGroup = true,
+                    groupDiscoveryError = null,
+                    groupCloneError = null,
+                    discoveredRepos = emptyList()
+                )
+            }
+
+            val creds = resolveCloneCredentials(useAuth, username, token)
+            val outcome = withContext(ioDispatcher) {
+                runCatching {
+                    groupDiscoveryService.discoverRepositories(cleanUrl, creds)
+                }
+            }
+
+            outcome.onSuccess { found ->
+                val existingUrls = _uiState.value.repos
+                    .mapNotNull { it.entry.remoteUrl?.trim()?.removeSuffix(".git")?.lowercase() }
+                    .toSet()
+                val existingNames = _uiState.value.repos
+                    .map { it.entry.name.trim().lowercase() }
+                    .toSet()
+
+                val items = found.map { repo ->
+                    val normUrl = repo.cloneUrl.trim().removeSuffix(".git").lowercase()
+                    val alreadyAdded = normUrl in existingUrls || repo.name.trim().lowercase() in existingNames
+                    DiscoveredRepoItem(
+                        repo = repo,
+                        selected = !alreadyAdded,
+                        alreadyAdded = alreadyAdded
+                    )
+                }
+
+                _uiState.update {
+                    it.copy(
+                        isDiscoveringGroup = false,
+                        discoveredRepos = items,
+                        groupDiscoveryError = if (items.isEmpty()) {
+                            "По этой ссылке не найдено доступных репозиториев"
+                        } else null
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isDiscoveringGroup = false,
+                        groupDiscoveryError = formatGitTransportError(err)
+                    )
+                }
+            }
+        }
+    }
+
+    fun toggleDiscoveredRepoSelection(repoId: String) {
+        if (_uiState.value.isGroupCloning) return
+        _uiState.update { state ->
+            state.copy(
+                discoveredRepos = state.discoveredRepos.map { item ->
+                    if (item.repo.id == repoId) item.copy(selected = !item.selected) else item
+                }
+            )
+        }
+    }
+
+    fun setAllDiscoveredReposSelected(selected: Boolean) {
+        if (_uiState.value.isGroupCloning) return
+        _uiState.update { state ->
+            state.copy(
+                discoveredRepos = state.discoveredRepos.map { it.copy(selected = selected) }
+            )
+        }
+    }
+
+    fun cloneSelectedGroupRepositories(
+        useAuth: Boolean,
+        username: String,
+        token: String,
+        saveCredentialsForRepos: Boolean,
+        onAllDone: () -> Unit
+    ) {
+        val selectedItems = _uiState.value.discoveredRepos.filter { it.selected }
+        if (selectedItems.isEmpty()) {
+            _uiState.update { it.copy(groupCloneError = "Отметьте хотя бы один репозиторий") }
+            return
+        }
+
+        groupCancelFlag = AtomicBoolean(false)
+        groupJob = viewModelScope.launch {
+            val total = selectedItems.size
+            val creds = resolveCloneCredentials(useAuth, username, token)
+            val explicitTokenCreds = if (useAuth && token.isNotBlank()) {
+                GitCredentials(username.trim(), token.trim())
+            } else null
+
+            _uiState.update {
+                it.copy(
+                    isGroupCloning = true,
+                    groupCloneError = null,
+                    groupCloneTotal = total,
+                    groupCloneCurrentIndex = 0,
+                    groupCloneCurrentRepoName = "",
+                    groupCloneProgress = null
+                )
+            }
+
+            var succeededCount = 0
+            val succeededIds = mutableSetOf<String>()
+            val failures = mutableListOf<String>()
+
+            for ((idx, item) in selectedItems.withIndex()) {
+                if (groupCancelFlag.get()) break
+
+                val repo = item.repo
+                _uiState.update {
+                    it.copy(
+                        groupCloneCurrentIndex = idx + 1,
+                        groupCloneCurrentRepoName = repo.name,
+                        groupCloneProgress = CloneProgress("Подключение к ${repo.name}...", 0, 0)
+                    )
+                }
+
+                val outcome = withContext(ioDispatcher) {
+                    runCatching {
+                        cloneAndRegisterSingleRepo(
+                            url = repo.cloneUrl,
+                            repoName = repo.name,
+                            branch = repo.defaultBranch,
+                            credentials = creds,
+                            saveCredentialsForRepo = useAuth && saveCredentialsForRepos && explicitTokenCreds != null,
+                            savedCredentialsToStore = explicitTokenCreds,
+                            onProgress = { progress ->
+                                _uiState.update { state -> state.copy(groupCloneProgress = progress) }
+                            },
+                            isCancelled = { groupCancelFlag.get() }
+                        )
+                    }
+                }
+
+                outcome.onSuccess {
+                    succeededCount++
+                    succeededIds.add(repo.id)
+                }.onFailure { err ->
+                    if (!groupCancelFlag.get()) {
+                        failures.add("${repo.name}: ${formatGitTransportError(err)}")
+                    }
+                }
+            }
+
+            val wasCancelled = groupCancelFlag.get()
+            refresh()
+
+            _uiState.update { state ->
+                val updatedItems = state.discoveredRepos.map { item ->
+                    if (item.repo.id in succeededIds) {
+                        item.copy(selected = false, alreadyAdded = true)
+                    } else {
+                        item
+                    }
+                }
+                val errMsg = when {
+                    wasCancelled -> "Групповое клонирование отменено (загружено: $succeededCount из $total)"
+                    failures.isNotEmpty() -> buildString {
+                        append("Загружено $succeededCount из $total. Ошибки:\n")
+                        append(failures.take(3).joinToString("\n"))
+                        if (failures.size > 3) append("\n...и ещё ${failures.size - 3}")
+                    }
+                    else -> null
+                }
+                state.copy(
+                    isGroupCloning = false,
+                    groupCloneProgress = null,
+                    discoveredRepos = updatedItems,
+                    groupCloneError = errMsg,
+                    infoMessage = if (!wasCancelled && failures.isEmpty()) {
+                        "Добавлено репозиториев: $succeededCount"
+                    } else null
+                )
+            }
+
+            if (!wasCancelled && failures.isEmpty()) {
+                onAllDone()
+            }
+        }
+    }
+
+    fun cancelGroupClone() {
+        groupCancelFlag.set(true)
+        groupJob?.cancel()
+    }
+
+    fun clearGroupError() {
+        _uiState.update { it.copy(groupDiscoveryError = null, groupCloneError = null) }
+    }
+
+    fun resetGroupDialogState() {
+        if (_uiState.value.isGroupCloning) return
+        groupJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isDiscoveringGroup = false,
+                groupDiscoveryError = null,
+                discoveredRepos = emptyList(),
+                groupCloneError = null,
+                groupCloneProgress = null,
+                groupCloneCurrentIndex = 0,
+                groupCloneTotal = 0,
+                groupCloneCurrentRepoName = ""
+            )
+        }
+    }
+
+    private fun resolveCloneCredentials(
+        useAuth: Boolean,
+        username: String,
+        token: String
+    ): GitCredentials? {
+        return when {
+            useAuth && token.isNotBlank() -> GitCredentials(username.trim(), token.trim())
+            useAuth -> credentialStore.resolveForRepo(projectId, null)
+            else -> null
+        }
+    }
+
+    private fun cloneAndRegisterSingleRepo(
+        url: String,
+        repoName: String,
+        branch: String?,
+        credentials: GitCredentials?,
+        saveCredentialsForRepo: Boolean,
+        savedCredentialsToStore: GitCredentials?,
+        onProgress: (CloneProgress) -> Unit,
+        isCancelled: () -> Boolean
+    ): String {
+        val (repoId, targetDir) = registry.allocateRepositoryDir(projectId, repoName)
+        gitEngine.cloneRepository(
+            url = url,
+            targetDir = targetDir,
+            branch = branch,
+            credentials = credentials,
+            onProgress = onProgress,
+            isCancelled = isCancelled
+        )
+        val entry = RepoEntry(
+            id = repoId,
+            projectId = projectId,
+            name = repoName,
+            directoryPath = targetDir.absolutePath,
+            createdAt = System.currentTimeMillis(),
+            remoteUrl = url
+        )
+        registry.registerRepository(entry)
+        if (saveCredentialsForRepo && savedCredentialsToStore != null) {
+            credentialStore.saveRepoCredentials(repoId, savedCredentialsToStore)
+        }
+        return entry.id
     }
 
     fun createEmptyRepository(
@@ -321,11 +597,18 @@ class ProjectDetailViewModel(
             projectId: String,
             gitEngine: GitEngine,
             registry: ProjectRegistry,
-            credentialStore: CredentialStore
+            credentialStore: CredentialStore,
+            groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService()
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return ProjectDetailViewModel(projectId, gitEngine, registry, credentialStore) as T
+                return ProjectDetailViewModel(
+                    projectId = projectId,
+                    gitEngine = gitEngine,
+                    registry = registry,
+                    credentialStore = credentialStore,
+                    groupDiscoveryService = groupDiscoveryService
+                ) as T
             }
         }
     }

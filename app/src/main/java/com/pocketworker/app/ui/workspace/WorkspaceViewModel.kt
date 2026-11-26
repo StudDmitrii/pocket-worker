@@ -7,11 +7,13 @@ import com.pocketworker.app.core.git.CommitDetail
 import com.pocketworker.app.core.git.FileChangeType
 import com.pocketworker.app.core.git.FileReadResult
 import com.pocketworker.app.core.git.GitBranch
+import com.pocketworker.app.core.git.GitCommit
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.GitRemote
+import com.pocketworker.app.core.git.GitStashEntry
 import com.pocketworker.app.core.git.GitStatusSummary
-import com.pocketworker.app.core.git.GitCommit
+import com.pocketworker.app.core.git.GitTag
 import com.pocketworker.app.core.git.ProjectFileItem
 import com.pocketworker.app.core.git.ProjectFileManager
 import com.pocketworker.app.core.git.RepoEntry
@@ -36,6 +38,7 @@ enum class WorkspaceTab {
 data class FileEditorState(
     val relativePath: String,
     val content: String,
+    val diskContent: String = content,
     val isBinary: Boolean = false,
     val isTooLarge: Boolean = false,
     val sizeBytes: Long = 0L,
@@ -46,6 +49,13 @@ data class FileEditorState(
 data class DiffDialogState(
     val title: String,
     val diffText: String
+)
+
+data class GitOutputLogEntry(
+    val timestampMillis: Long,
+    val command: String,
+    val output: String,
+    val isError: Boolean
 )
 
 data class WorkspaceUiState(
@@ -68,6 +78,10 @@ data class WorkspaceUiState(
     val gitStatus: GitStatusSummary? = null,
     val branches: List<GitBranch> = emptyList(),
     val remotes: List<GitRemote> = emptyList(),
+    val stashes: List<GitStashEntry> = emptyList(),
+    val tags: List<GitTag> = emptyList(),
+    val viewChangesAsTree: Boolean = false,
+    val gitOutputLogs: List<GitOutputLogEntry> = emptyList(),
     val repoCredentials: GitCredentials? = null,
     val hasFallbackCredentials: Boolean = false,
 
@@ -112,9 +126,17 @@ class WorkspaceViewModel(
                     val entry = registry.findRepository(projectId, repoId)
                         ?: throw IllegalStateException("Репозиторий не найден")
                     val root = File(entry.directoryPath)
-                    val status = gitEngine.getStatus(root)
+                    val rawStatus = gitEngine.getStatus(root)
+                    val status = if (rawStatus.isGitRepo) {
+                        val (effName, effEmail) = GitEngine.resolveEffectiveAuthor(gitEngine, root, parentProject)
+                        rawStatus.copy(authorName = effName, authorEmail = effEmail)
+                    } else {
+                        rawStatus
+                    }
                     val branches = if (status.isGitRepo) gitEngine.getBranches(root) else emptyList()
                     val remotes = if (status.isGitRepo) gitEngine.getRemotes(root) else emptyList()
+                    val stashes = if (status.isGitRepo) gitEngine.getStashes(root) else emptyList()
+                    val tags = if (status.isGitRepo) gitEngine.getTags(root) else emptyList()
                     val statusMap = buildStatusMap(status)
                     val curState = _uiState.value
                     val currentDir = curState.currentDir
@@ -145,6 +167,8 @@ class WorkspaceViewModel(
                         status = status,
                         branches = branches,
                         remotes = remotes,
+                        stashes = stashes,
+                        tags = tags,
                         files = files,
                         historyRef = historyRef,
                         commits = commits,
@@ -162,6 +186,8 @@ class WorkspaceViewModel(
                         gitStatus = data.status,
                         branches = data.branches,
                         remotes = data.remotes,
+                        stashes = data.stashes,
+                        tags = data.tags,
                         files = data.files,
                         selectedHistoryRef = data.historyRef,
                         commits = data.commits,
@@ -170,6 +196,9 @@ class WorkspaceViewModel(
                         hasFallbackCredentials = data.hasFallbackCredentials,
                         isLoading = false
                     )
+                }
+                if (_uiState.value.fileEditor != null) {
+                    reloadOpenFileFromDisk()
                 }
             }.onFailure { err ->
                 _uiState.update {
@@ -254,17 +283,20 @@ class WorkspaceViewModel(
                     is FileReadResult.Text -> FileEditorState(
                         relativePath = relativePath,
                         content = res.content,
+                        diskContent = res.content,
                         sizeBytes = res.sizeBytes
                     )
                     is FileReadResult.Binary -> FileEditorState(
                         relativePath = relativePath,
                         content = "",
+                        diskContent = "",
                         isBinary = true,
                         sizeBytes = res.sizeBytes
                     )
                     is FileReadResult.TooLarge -> FileEditorState(
                         relativePath = relativePath,
                         content = "",
+                        diskContent = "",
                         isTooLarge = true,
                         sizeBytes = res.sizeBytes
                     )
@@ -272,6 +304,83 @@ class WorkspaceViewModel(
                 _uiState.update { it.copy(fileEditor = editorState) }
             }.onFailure { err ->
                 _uiState.update { it.copy(errorMessage = err.localizedMessage ?: "Не удалось открыть файл") }
+            }
+        }
+    }
+
+    /**
+     * Re-reads the currently open file from disk (e.g. after the AI agent edited or rolled it back)
+     * so the viewer/editor displays updated content immediately without closing and reopening the file.
+     */
+    fun reloadOpenFileFromDisk() {
+        val project = _uiState.value.project ?: return
+        val openEditor = _uiState.value.fileEditor ?: return
+        if (openEditor.isSaving) return
+        val targetPath = openEditor.relativePath
+
+        viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching {
+                    val rootDir = File(project.directoryPath)
+                    val diskFile = fileManager.resolveSafe(rootDir, targetPath)
+                    if (!diskFile.exists() || !diskFile.isFile) {
+                        null
+                    } else {
+                        fileManager.readTextFile(rootDir, targetPath)
+                    }
+                }
+            }
+            outcome.onSuccess { readResult ->
+                _uiState.update { state ->
+                    val current = state.fileEditor ?: return@update state
+                    if (current.relativePath != targetPath || current.isSaving) return@update state
+                    when (readResult) {
+                        null -> state.copy(
+                            fileEditor = null,
+                            infoMessage = "Файл «$targetPath» был удалён"
+                        )
+                        is FileReadResult.Text -> {
+                            val diskChanged = readResult.content != current.diskContent
+                            val needsSync = (!current.isModifiedInEditor &&
+                                (readResult.content != current.content || current.isBinary || current.isTooLarge)) ||
+                                (current.isModifiedInEditor && diskChanged)
+                            if (needsSync) {
+                                state.copy(
+                                    fileEditor = current.copy(
+                                        content = readResult.content,
+                                        diskContent = readResult.content,
+                                        isBinary = false,
+                                        isTooLarge = false,
+                                        sizeBytes = readResult.sizeBytes,
+                                        isModifiedInEditor = false
+                                    )
+                                )
+                            } else {
+                                state
+                            }
+                        }
+                        is FileReadResult.Binary -> state.copy(
+                            fileEditor = current.copy(
+                                content = "",
+                                diskContent = "",
+                                isBinary = true,
+                                isTooLarge = false,
+                                sizeBytes = readResult.sizeBytes,
+                                isModifiedInEditor = false
+                            )
+                        )
+                        is FileReadResult.TooLarge -> state.copy(
+                            fileEditor = current.copy(
+                                content = "",
+                                diskContent = "",
+                                isBinary = false,
+                                isTooLarge = true,
+                                sizeBytes = readResult.sizeBytes,
+                                isModifiedInEditor = false
+                            )
+                        )
+                    }
+                }
             }
         }
     }
@@ -298,7 +407,11 @@ class WorkspaceViewModel(
             outcome.onSuccess {
                 _uiState.update {
                     it.copy(
-                        fileEditor = editor.copy(isModifiedInEditor = false, isSaving = false),
+                        fileEditor = editor.copy(
+                            diskContent = editor.content,
+                            isModifiedInEditor = false,
+                            isSaving = false
+                        ),
                         infoMessage = "Файл сохранён: ${editor.relativePath}"
                     )
                 }
@@ -359,56 +472,93 @@ class WorkspaceViewModel(
 
     // region Git operations
 
+    fun toggleViewChangesAsTree() {
+        _uiState.update { it.copy(viewChangesAsTree = !it.viewChangesAsTree) }
+    }
+
+    fun clearGitOutputLogs() {
+        _uiState.update { it.copy(gitOutputLogs = emptyList()) }
+    }
+
     fun initGitInProject(initialBranch: String = "main") {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Инициализация Git...", successMessage = "Git инициализирован") {
+        runGitOrFileAction(
+            busyText = "Инициализация Git...",
+            successMessage = "Git инициализирован",
+            logCommand = "git init -b $initialBranch"
+        ) {
             gitEngine.initGitInExistingProject(File(project.directoryPath), initialBranch)
         }
     }
 
     fun stageFile(relativePath: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Индексация...") {
+        runGitOrFileAction("Индексация...", logCommand = "git add $relativePath") {
             gitEngine.stageFile(File(project.directoryPath), relativePath)
         }
     }
 
     fun stageAll() {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Индексация всех изменений...") {
+        runGitOrFileAction("Индексация всех изменений...", logCommand = "git add -A") {
             gitEngine.stageAll(File(project.directoryPath))
         }
     }
 
     fun unstageFile(relativePath: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Снятие индексации...") {
+        runGitOrFileAction("Снятие индексации...", logCommand = "git reset -- $relativePath") {
             gitEngine.unstageFile(File(project.directoryPath), relativePath)
         }
     }
 
     fun unstageAll() {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Снятие индексации всех файлов...") {
+        runGitOrFileAction("Снятие индексации всех файлов...", logCommand = "git reset") {
             gitEngine.unstageAll(File(project.directoryPath))
         }
     }
 
     fun discardFileChanges(relativePath: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Откат изменений...", successMessage = "Изменения в $relativePath отменены") {
+        runGitOrFileAction(
+            busyText = "Откат изменений...",
+            successMessage = "Изменения в $relativePath отменены",
+            logCommand = "git checkout -- $relativePath"
+        ) {
             gitEngine.discardFileChanges(File(project.directoryPath), relativePath)
         }
     }
 
-    fun commit(message: String, amend: Boolean, pushAfter: Boolean) {
+    fun discardAllChanges() {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Откат всех изменений...",
+            successMessage = "Все рабочие изменения отменены",
+            logCommand = "git reset --hard && clean untracked"
+        ) {
+            gitEngine.discardAllChanges(File(project.directoryPath))
+        }
+    }
+
+    fun commit(message: String, amend: Boolean, pushAfter: Boolean, stageAllFirst: Boolean = false) {
         val project = _uiState.value.project ?: return
         val status = _uiState.value.gitStatus ?: return
+        val cmdLabel = buildString {
+            if (stageAllFirst) append("git add -A && ")
+            append("git commit")
+            if (amend) append(" --amend")
+            if (pushAfter) append(" && git push")
+        }
         runGitOrFileAction(
             busyText = if (pushAfter) "Коммит и отправка..." else "Создание коммита...",
-            resetHistoryRef = false
+            resetHistoryRef = false,
+            logCommand = cmdLabel
         ) {
             val repoDir = File(project.directoryPath)
+            if (stageAllFirst) {
+                gitEngine.stageAll(repoDir)
+            }
             val commit = gitEngine.commit(
                 repoDir = repoDir,
                 message = message,
@@ -428,7 +578,11 @@ class WorkspaceViewModel(
 
     fun createBranch(branchName: String, startPoint: String? = null, checkout: Boolean = true) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Создание ветки...", resetHistoryRef = checkout) {
+        runGitOrFileAction(
+            busyText = "Создание ветки...",
+            resetHistoryRef = checkout,
+            logCommand = if (checkout) "git checkout -b $branchName" else "git branch $branchName"
+        ) {
             gitEngine.createBranch(File(project.directoryPath), branchName, startPoint, checkout)
             if (checkout) "Переключено на новую ветку «$branchName»" else "Ветка «$branchName» создана"
         }
@@ -436,7 +590,11 @@ class WorkspaceViewModel(
 
     fun checkoutBranch(branchNameOrRef: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Переключение ветки...", resetHistoryRef = true) {
+        runGitOrFileAction(
+            busyText = "Переключение ветки...",
+            resetHistoryRef = true,
+            logCommand = "git checkout $branchNameOrRef"
+        ) {
             gitEngine.checkoutBranch(File(project.directoryPath), branchNameOrRef)
             "Текущая ветка изменена"
         }
@@ -444,7 +602,11 @@ class WorkspaceViewModel(
 
     fun renameBranch(oldName: String, newName: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Переименование ветки...", resetHistoryRef = true) {
+        runGitOrFileAction(
+            busyText = "Переименование ветки...",
+            resetHistoryRef = true,
+            logCommand = "git branch -m $oldName $newName"
+        ) {
             gitEngine.renameBranch(File(project.directoryPath), oldName, newName)
             "Ветка «$oldName» переименована в «$newName»"
         }
@@ -452,7 +614,10 @@ class WorkspaceViewModel(
 
     fun deleteBranch(branchName: String, force: Boolean = false) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Удаление ветки...") {
+        runGitOrFileAction(
+            busyText = "Удаление ветки...",
+            logCommand = "git branch ${if (force) "-D" else "-d"} $branchName"
+        ) {
             gitEngine.deleteBranch(File(project.directoryPath), branchName, force)
             "Ветка «$branchName» удалена"
         }
@@ -460,7 +625,10 @@ class WorkspaceViewModel(
 
     fun mergeBranch(sourceBranch: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Слияние ветки «$sourceBranch»...") {
+        runGitOrFileAction(
+            busyText = "Слияние ветки «$sourceBranch»...",
+            logCommand = "git merge $sourceBranch"
+        ) {
             val result = gitEngine.mergeBranch(File(project.directoryPath), sourceBranch)
             if (result.isSuccessful) {
                 "Merge ($sourceBranch): ${result.statusName}"
@@ -475,7 +643,10 @@ class WorkspaceViewModel(
 
     fun addRemote(name: String, url: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Добавление remote...") {
+        runGitOrFileAction(
+            busyText = "Добавление remote...",
+            logCommand = "git remote add $name $url"
+        ) {
             gitEngine.addRemote(File(project.directoryPath), name, url)
             if (name.trim() == "origin") {
                 registry.updateRepositoryRemoteUrl(projectId, repoId, url.trim())
@@ -486,7 +657,10 @@ class WorkspaceViewModel(
 
     fun updateRemoteUrl(name: String, newUrl: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Обновление remote...") {
+        runGitOrFileAction(
+            busyText = "Обновление remote...",
+            logCommand = "git remote set-url $name $newUrl"
+        ) {
             gitEngine.updateRemoteUrl(File(project.directoryPath), name, newUrl)
             if (name == "origin") {
                 registry.updateRepositoryRemoteUrl(projectId, repoId, newUrl.trim())
@@ -497,7 +671,10 @@ class WorkspaceViewModel(
 
     fun removeRemote(name: String) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Удаление remote...") {
+        runGitOrFileAction(
+            busyText = "Удаление remote...",
+            logCommand = "git remote remove $name"
+        ) {
             gitEngine.removeRemote(File(project.directoryPath), name)
             if (name == "origin") {
                 registry.updateRepositoryRemoteUrl(projectId, repoId, null)
@@ -508,15 +685,26 @@ class WorkspaceViewModel(
 
     fun fetch(remoteName: String = "origin") {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Fetch из $remoteName...") {
+        runGitOrFileAction(
+            busyText = "Fetch из $remoteName...",
+            logCommand = "git fetch $remoteName"
+        ) {
             gitEngine.fetch(File(project.directoryPath), remoteName, resolveEffectiveCredentials())
         }
     }
 
-    fun pull(remoteName: String = "origin") {
+    fun pull(remoteName: String = "origin", rebase: Boolean = false) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Pull из $remoteName...") {
-            val res = gitEngine.pull(File(project.directoryPath), remoteName, resolveEffectiveCredentials())
+        runGitOrFileAction(
+            busyText = if (rebase) "Pull (rebase) из $remoteName..." else "Pull из $remoteName...",
+            logCommand = if (rebase) "git pull --rebase $remoteName" else "git pull $remoteName"
+        ) {
+            val res = gitEngine.pull(
+                repoDir = File(project.directoryPath),
+                remoteName = remoteName,
+                credentials = resolveEffectiveCredentials(),
+                rebase = rebase
+            )
             if (!res.isSuccessful) {
                 throw IllegalStateException(res.summary)
             }
@@ -524,10 +712,144 @@ class WorkspaceViewModel(
         }
     }
 
-    fun push(remoteName: String = "origin", branchName: String? = null) {
+    fun push(remoteName: String = "origin", branchName: String? = null, force: Boolean = false) {
         val project = _uiState.value.project ?: return
-        runGitOrFileAction("Push в $remoteName...") {
-            gitEngine.push(File(project.directoryPath), remoteName, branchName, resolveEffectiveCredentials())
+        runGitOrFileAction(
+            busyText = if (force) "Force Push в $remoteName..." else "Push в $remoteName...",
+            logCommand = if (force) "git push --force $remoteName" else "git push $remoteName"
+        ) {
+            gitEngine.push(
+                repoDir = File(project.directoryPath),
+                remoteName = remoteName,
+                branchName = branchName,
+                credentials = resolveEffectiveCredentials(),
+                force = force
+            )
+        }
+    }
+
+    fun syncRemote(remoteName: String = "origin") {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Синхронизация с $remoteName...",
+            logCommand = "git pull $remoteName && git push $remoteName"
+        ) {
+            val repoDir = File(project.directoryPath)
+            val creds = resolveEffectiveCredentials()
+            val pullRes = gitEngine.pull(repoDir, remoteName, creds)
+            if (!pullRes.isSuccessful) {
+                throw IllegalStateException(pullRes.summary)
+            }
+            val status = gitEngine.getStatus(repoDir)
+            if (!status.isUnborn) {
+                val pushMsg = gitEngine.push(repoDir, remoteName, credentials = creds)
+                "${pullRes.summary}. $pushMsg"
+            } else {
+                pullRes.summary
+            }
+        }
+    }
+
+    fun createStash(message: String? = null, includeUntracked: Boolean = true) {
+        val project = _uiState.value.project ?: return
+        val flag = if (includeUntracked) " -u" else ""
+        runGitOrFileAction(
+            busyText = "Сохранение в stash...",
+            logCommand = "git stash push$flag"
+        ) {
+            val entry = gitEngine.createStash(
+                repoDir = File(project.directoryPath),
+                message = message,
+                includeUntracked = includeUntracked
+            )
+            if (entry == null) {
+                "Нет изменений для сохранения в stash"
+            } else {
+                "Сохранено в stash: ${entry.message}"
+            }
+        }
+    }
+
+    fun applyStash(index: Int = 0) {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Применение stash@{$index}...",
+            logCommand = "git stash apply stash@{$index}"
+        ) {
+            gitEngine.applyStash(File(project.directoryPath), index)
+            "Применён stash@{$index}"
+        }
+    }
+
+    fun popStash(index: Int = 0) {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Применение и удаление stash@{$index}...",
+            logCommand = "git stash pop stash@{$index}"
+        ) {
+            gitEngine.popStash(File(project.directoryPath), index)
+            "Применён и удалён stash@{$index}"
+        }
+    }
+
+    fun dropStash(index: Int) {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Удаление stash@{$index}...",
+            logCommand = "git stash drop stash@{$index}"
+        ) {
+            gitEngine.dropStash(File(project.directoryPath), index)
+            "Удалён stash@{$index}"
+        }
+    }
+
+    fun clearStashes() {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Очистка всех stash...",
+            logCommand = "git stash clear"
+        ) {
+            gitEngine.clearStashes(File(project.directoryPath))
+            "Все отложенные изменения (stash) очищены"
+        }
+    }
+
+    fun createTag(name: String, message: String? = null) {
+        val project = _uiState.value.project ?: return
+        val status = _uiState.value.gitStatus
+        runGitOrFileAction(
+            busyText = "Создание тега «$name»...",
+            logCommand = "git tag $name"
+        ) {
+            gitEngine.createTag(
+                repoDir = File(project.directoryPath),
+                name = name,
+                message = message,
+                authorName = status?.authorName ?: GitEngine.DEFAULT_AUTHOR_NAME,
+                authorEmail = status?.authorEmail ?: GitEngine.DEFAULT_AUTHOR_EMAIL
+            )
+            "Тег «${name.trim()}» создан"
+        }
+    }
+
+    fun deleteTag(name: String) {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Удаление тега «$name»...",
+            logCommand = "git tag -d $name"
+        ) {
+            gitEngine.deleteTag(File(project.directoryPath), name)
+            "Тег «$name» удалён"
+        }
+    }
+
+    fun pushTags(remoteName: String = "origin") {
+        val project = _uiState.value.project ?: return
+        runGitOrFileAction(
+            busyText = "Отправка тегов в $remoteName...",
+            logCommand = "git push $remoteName --tags"
+        ) {
+            gitEngine.pushTags(File(project.directoryPath), remoteName, resolveEffectiveCredentials())
         }
     }
 
@@ -716,6 +1038,7 @@ class WorkspaceViewModel(
         busyText: String,
         successMessage: String? = null,
         resetHistoryRef: Boolean = false,
+        logCommand: String? = null,
         block: suspend () -> Any?
     ) {
         viewModelScope.launch {
@@ -726,20 +1049,45 @@ class WorkspaceViewModel(
             outcome.onSuccess { res ->
                 val messageFromBlock = res as? String
                 val info = successMessage ?: messageFromBlock
-                _uiState.update {
-                    it.copy(
+                _uiState.update { current ->
+                    val updatedLogs = if (logCommand != null) {
+                        val entry = GitOutputLogEntry(
+                            timestampMillis = System.currentTimeMillis(),
+                            command = logCommand,
+                            output = info ?: "OK",
+                            isError = false
+                        )
+                        (listOf(entry) + current.gitOutputLogs).take(100)
+                    } else {
+                        current.gitOutputLogs
+                    }
+                    current.copy(
                         isBusy = false,
                         busyMessage = null,
-                        infoMessage = info
+                        infoMessage = info,
+                        gitOutputLogs = updatedLogs
                     )
                 }
                 loadAll(resetHistoryRef = resetHistoryRef)
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                val errorText = formatGitTransportError(err)
+                _uiState.update { current ->
+                    val updatedLogs = if (logCommand != null) {
+                        val entry = GitOutputLogEntry(
+                            timestampMillis = System.currentTimeMillis(),
+                            command = logCommand,
+                            output = errorText,
+                            isError = true
+                        )
+                        (listOf(entry) + current.gitOutputLogs).take(100)
+                    } else {
+                        current.gitOutputLogs
+                    }
+                    current.copy(
                         isBusy = false,
                         busyMessage = null,
-                        errorMessage = formatGitTransportError(err)
+                        errorMessage = errorText,
+                        gitOutputLogs = updatedLogs
                     )
                 }
             }
@@ -777,6 +1125,8 @@ class WorkspaceViewModel(
         val status: GitStatusSummary,
         val branches: List<GitBranch>,
         val remotes: List<GitRemote>,
+        val stashes: List<GitStashEntry>,
+        val tags: List<GitTag>,
         val files: List<ProjectFileItem>,
         val historyRef: String?,
         val commits: List<GitCommit>,

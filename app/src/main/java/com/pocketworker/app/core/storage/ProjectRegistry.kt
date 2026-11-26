@@ -41,6 +41,7 @@ class ProjectRegistry(
         val cleanName = name.trim()
         require(cleanName.isNotEmpty()) { "Название проекта не может быть пустым" }
 
+        val records = loadAndReconcileAll().toMutableList()
         val dir = allocateUniqueChildDir(projectsRootDir, cleanName, fallback = "project")
         if (!dir.mkdirs() && !dir.exists()) {
             throw IllegalStateException("Не удалось создать папку проекта: ${dir.absolutePath}")
@@ -53,7 +54,8 @@ class ProjectRegistry(
             createdAt = System.currentTimeMillis(),
             description = description.trim()
         )
-        val records = loadAndReconcileAll().toMutableList()
+        val targetCanonical = dir.canonicalPath
+        records.removeAll { File(it.project.directoryPath).canonicalPath == targetCanonical }
         records.add(StoredProject(project, emptyList()))
         writeRecords(records)
         return project
@@ -69,6 +71,25 @@ class ProjectRegistry(
                     project = stored.project.copy(
                         name = cleanName,
                         description = newDescription.trim()
+                    )
+                )
+            } else {
+                stored
+            }
+        }
+        writeRecords(records)
+    }
+
+    @Synchronized
+    fun updateProjectAuthor(projectId: String, authorName: String?, authorEmail: String?) {
+        val cleanName = authorName?.trim()?.ifEmpty { null }
+        val cleanEmail = authorEmail?.trim()?.ifEmpty { null }
+        val records = loadAndReconcileAll().map { stored ->
+            if (stored.project.id == projectId) {
+                stored.copy(
+                    project = stored.project.copy(
+                        authorName = cleanName,
+                        authorEmail = cleanEmail
                     )
                 )
             } else {
@@ -184,11 +205,36 @@ class ProjectRegistry(
     }
 
     private fun loadAndReconcileAll(): List<StoredProject> {
-        val records = readStoredRecords().toMutableList()
+        val rawRecords = readStoredRecords()
         var dirty = false
 
-        // Remove entries whose folders no longer exist? Keep only existing or discover subfolders
-        val knownProjectPaths = records.map { File(it.project.directoryPath).canonicalPath }.toSet()
+        // Deduplicate any duplicate records pointing to the same canonical project folder
+        val recordsByCanonical = LinkedHashMap<String, StoredProject>()
+        for (entry in rawRecords) {
+            val canonical = File(entry.project.directoryPath).canonicalPath
+            val existing = recordsByCanonical[canonical]
+            if (existing == null) {
+                recordsByCanonical[canonical] = entry
+            } else {
+                dirty = true
+                val preferNew = when {
+                    entry.repositories.size != existing.repositories.size ->
+                        entry.repositories.size > existing.repositories.size
+                    entry.project.description.isNotBlank() != existing.project.description.isNotBlank() ->
+                        entry.project.description.isNotBlank()
+                    else -> entry.project.createdAt >= existing.project.createdAt
+                }
+                val winner = if (preferNew) entry else existing
+                val mergedRepos = (existing.repositories + entry.repositories)
+                    .distinctBy { File(it.directoryPath).canonicalPath }
+                    .map { it.copy(projectId = winner.project.id) }
+                recordsByCanonical[canonical] = winner.copy(repositories = mergedRepos)
+            }
+        }
+        val records = recordsByCanonical.values.toMutableList()
+
+        // Discover untracked folders directly under projectsRootDir
+        val knownProjectPaths = recordsByCanonical.keys
         val topLevelDirs = projectsRootDir.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }.orEmpty()
 
         for (dir in topLevelDirs) {
@@ -272,7 +318,9 @@ class ProjectRegistry(
                             name = pObj.getString("name"),
                             directoryPath = pObj.getString("directoryPath"),
                             createdAt = pObj.optLong("createdAt", System.currentTimeMillis()),
-                            description = pObj.optString("description", "")
+                            description = pObj.optString("description", ""),
+                            authorName = pObj.optString("authorName", "").ifBlank { null },
+                            authorEmail = pObj.optString("authorEmail", "").ifBlank { null }
                         )
                         val reposArray = pObj.optJSONArray("repositories") ?: JSONArray()
                         val repos = buildList {
@@ -360,6 +408,12 @@ class ProjectRegistry(
                     put("createdAt", stored.project.createdAt)
                     if (stored.project.description.isNotBlank()) {
                         put("description", stored.project.description)
+                    }
+                    if (!stored.project.authorName.isNullOrBlank()) {
+                        put("authorName", stored.project.authorName)
+                    }
+                    if (!stored.project.authorEmail.isNullOrBlank()) {
+                        put("authorEmail", stored.project.authorEmail)
                     }
                     put("repositories", reposArray)
                 }

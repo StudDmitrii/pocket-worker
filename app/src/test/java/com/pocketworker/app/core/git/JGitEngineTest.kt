@@ -196,4 +196,129 @@ class JGitEngineTest {
         engine.removeRemote(dir, "origin")
         assertTrue(engine.getRemotes(dir).isEmpty())
     }
+
+    @Test
+    fun `stash create apply pop drop and clear workflow`() {
+        val dir = File(tempRoot, "stash-test")
+        engine.initProject(
+            targetDir = dir,
+            initialBranch = "main",
+            initGit = true,
+            createReadmeAndCommit = true,
+            projectName = "StashProj"
+        )
+
+        // Modify tracked file and create untracked file
+        File(dir, "README.md").appendText("local edit\n")
+        File(dir, "draft.txt").writeText("untracked draft\n")
+
+        val created = engine.createStash(dir, message = "WIP feature", includeUntracked = true)
+        assertNotNull(created)
+
+        // Working directory should now be clean
+        var status = engine.getStatus(dir)
+        assertFalse(status.hasChanges)
+        assertFalse(File(dir, "draft.txt").exists())
+
+        val stashes = engine.getStashes(dir)
+        assertEquals(1, stashes.size)
+        assertTrue(stashes.first().message.contains("WIP feature"))
+
+        // Apply keeps stash entry and restores changes + untracked
+        engine.applyStash(dir, index = 0)
+        status = engine.getStatus(dir)
+        assertTrue(status.hasChanges)
+        assertTrue(File(dir, "draft.txt").exists())
+        assertEquals(1, engine.getStashes(dir).size)
+
+        // Discard all and pop stash (restores and drops entry)
+        engine.discardAllChanges(dir)
+        assertFalse(engine.getStatus(dir).hasChanges)
+        assertFalse(File(dir, "draft.txt").exists())
+
+        engine.popStash(dir, index = 0)
+        assertTrue(engine.getStatus(dir).hasChanges)
+        assertTrue(File(dir, "draft.txt").exists())
+        assertTrue(engine.getStashes(dir).isEmpty())
+
+        // Create two stashes and test drop + clear
+        engine.createStash(dir, message = "First", includeUntracked = true)
+        File(dir, "second.txt").writeText("2")
+        engine.createStash(dir, message = "Second", includeUntracked = true)
+        assertEquals(2, engine.getStashes(dir).size)
+
+        engine.dropStash(dir, index = 0)
+        assertEquals(1, engine.getStashes(dir).size)
+        engine.clearStashes(dir)
+        assertTrue(engine.getStashes(dir).isEmpty())
+    }
+
+    @Test
+    fun `tags create list push and delete workflow`() {
+        val bareDir = File(tempRoot, "tags-remote.git")
+        Git.init().setDirectory(bareDir).setBare(true).call().close()
+
+        val dir = File(tempRoot, "tags-local")
+        engine.initProject(
+            targetDir = dir,
+            initialBranch = "main",
+            initGit = true,
+            createReadmeAndCommit = true,
+            remoteUrl = bareDir.toURI().toString()
+        )
+        engine.push(dir, remoteName = "origin", branchName = "main")
+
+        engine.createTag(dir, name = "v1.0.0", message = "First release")
+        engine.createTag(dir, name = "v0.9.0-beta", message = null)
+
+        val tags = engine.getTags(dir)
+        assertEquals(2, tags.size)
+        val releaseTag = tags.first { it.name == "v1.0.0" }
+        assertTrue(releaseTag.isAnnotated)
+        assertEquals("First release", releaseTag.message)
+        val betaTag = tags.first { it.name == "v0.9.0-beta" }
+        assertFalse(betaTag.isAnnotated)
+
+        val pushTagsMsg = engine.pushTags(dir, remoteName = "origin")
+        assertTrue(pushTagsMsg.contains("Push"))
+
+        // Verify bare remote received both tags
+        Git.open(bareDir).use { bareGit ->
+            val remoteTags = bareGit.tagList().call().map { it.name }
+            assertTrue("refs/tags/v1.0.0" in remoteTags)
+            assertTrue("refs/tags/v0.9.0-beta" in remoteTags)
+        }
+
+        engine.deleteTag(dir, "v0.9.0-beta")
+        assertEquals(1, engine.getTags(dir).size)
+    }
+
+    @Test
+    fun `discardAllChanges cleans tracked and untracked while keeping gitignored files`() {
+        val dir = File(tempRoot, "discard-all-test")
+        engine.initProject(
+            targetDir = dir,
+            initialBranch = "main",
+            initGit = true,
+            createReadmeAndCommit = true
+        )
+
+        File(dir, ".gitignore").writeText("ignored.log\n")
+        engine.stageAll(dir)
+        engine.commit(dir, "Add gitignore", "User", "u@e.com")
+
+        File(dir, "README.md").writeText("modified")
+        File(dir, "staged.txt").writeText("staged")
+        engine.stageFile(dir, "staged.txt")
+        File(dir, "untracked.txt").writeText("temp")
+        File(dir, "ignored.log").writeText("keep me")
+
+        engine.discardAllChanges(dir)
+
+        val status = engine.getStatus(dir)
+        assertFalse(status.hasChanges)
+        assertFalse(File(dir, "staged.txt").exists())
+        assertFalse(File(dir, "untracked.txt").exists())
+        assertTrue(File(dir, "ignored.log").exists())
+    }
 }

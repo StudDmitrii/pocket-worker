@@ -45,6 +45,8 @@ interface GitEngine {
 
     fun discardFileChanges(repoDir: File, relativePath: String)
 
+    fun discardAllChanges(repoDir: File)
+
     fun commit(
         repoDir: File,
         message: String,
@@ -87,13 +89,49 @@ interface GitEngine {
     fun pull(
         repoDir: File,
         remoteName: String = "origin",
-        credentials: GitCredentials? = null
+        credentials: GitCredentials? = null,
+        rebase: Boolean = false
     ): PullResultInfo
 
     fun push(
         repoDir: File,
         remoteName: String = "origin",
         branchName: String? = null,
+        credentials: GitCredentials? = null,
+        force: Boolean = false
+    ): String
+
+    fun getStashes(repoDir: File): List<GitStashEntry>
+
+    fun createStash(
+        repoDir: File,
+        message: String? = null,
+        includeUntracked: Boolean = true
+    ): GitStashEntry?
+
+    fun applyStash(repoDir: File, index: Int = 0)
+
+    fun popStash(repoDir: File, index: Int = 0)
+
+    fun dropStash(repoDir: File, index: Int)
+
+    fun clearStashes(repoDir: File)
+
+    fun getTags(repoDir: File): List<GitTag>
+
+    fun createTag(
+        repoDir: File,
+        name: String,
+        message: String? = null,
+        authorName: String = DEFAULT_AUTHOR_NAME,
+        authorEmail: String = DEFAULT_AUTHOR_EMAIL
+    )
+
+    fun deleteTag(repoDir: File, name: String)
+
+    fun pushTags(
+        repoDir: File,
+        remoteName: String = "origin",
         credentials: GitCredentials? = null
     ): String
 
@@ -112,6 +150,12 @@ interface GitEngine {
 
     fun getAuthorConfig(repoDir: File): Pair<String, String>
 
+    /**
+     * Returns explicit repository-local `user.name` / `user.email` from `.git/config`,
+     * or `null` when the repository does not define its own local override.
+     */
+    fun getLocalAuthorConfig(repoDir: File): Pair<String, String>? = null
+
     fun setAuthorConfig(
         repoDir: File,
         name: String,
@@ -119,8 +163,44 @@ interface GitEngine {
         saveGlobally: Boolean = false
     )
 
+    /**
+     * Clears repository-local `user.name` / `user.email` in `.git/config` so the repo
+     * inherits from project-level or global default author settings.
+     */
+    fun clearLocalAuthorConfig(repoDir: File) = Unit
+
     companion object {
         const val DEFAULT_AUTHOR_NAME = "PocketWorker User"
         const val DEFAULT_AUTHOR_EMAIL = "user@pocketworker.local"
+
+        /**
+         * Resolves effective Git commit author with strict 3-level precedence:
+         * 1. Repository local `.git/config` override
+         * 2. Project-level author (`WorkspaceProject.authorName` / `authorEmail`)
+         * 3. Global default Git author (`~/.gitconfig` / built-in fallback)
+         */
+        fun resolveEffectiveAuthor(
+            gitEngine: GitEngine,
+            repoDir: File,
+            project: WorkspaceProject?
+        ): Pair<String, String> {
+            val local = gitEngine.getLocalAuthorConfig(repoDir)
+            val fallback = gitEngine.getAuthorConfig(repoDir)
+            if (local != null) {
+                val resolvedName = local.first.ifBlank {
+                    project?.authorName?.takeIf { it.isNotBlank() } ?: fallback.first
+                }
+                val resolvedEmail = local.second.ifBlank {
+                    project?.authorEmail?.takeIf { it.isNotBlank() } ?: fallback.second
+                }
+                return resolvedName to resolvedEmail
+            }
+            val projName = project?.authorName?.trim()?.ifEmpty { null }
+            val projEmail = project?.authorEmail?.trim()?.ifEmpty { null }
+            if (projName != null || projEmail != null) {
+                return (projName ?: fallback.first) to (projEmail ?: fallback.second)
+            }
+            return fallback
+        }
     }
 }

@@ -28,4 +28,20 @@ class CredentialStoreTest {
         store.removeRepoCredentials("r1")
         assertEquals(projectCreds, store.resolveForRepo("p1", "r1"))
     }
+
+    @Test
+    fun `ai api keys are isolated per provider`() {
+        val store = InMemoryCredentialStore()
+        store.saveAiApiKey(AiProvider.GEMINI, "AIza-test")
+
+        assertEquals("AIza-test", store.getAiApiKey(AiProvider.GEMINI))
+        assertNull(store.getAiApiKey(AiProvider.ANTHROPIC))
+        assertNull(store.getAiApiKey(AiProvider.OPENAI))
+        assertEquals(mapOf(AiProvider.GEMINI to "AIza-test"), store.getAllAiApiKeys())
+
+        store.saveAiApiKey(AiProvider.OPENAI, "sk-openai-test")
+        assertEquals("AIza-test", store.getAiApiKey(AiProvider.GEMINI))
+        assertEquals("sk-openai-test", store.getAiApiKey(AiProvider.OPENAI))
+        assertNull(store.getAiApiKey(AiProvider.ANTHROPIC))
+    }
 }

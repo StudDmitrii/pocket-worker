@@ -1,5 +1,6 @@
 package com.pocketworker.app.ui.workspace
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,43 +8,43 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.CallMerge
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Cloud
-import androidx.compose.material.icons.rounded.CloudDownload
-import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudUpload
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,22 +64,27 @@ import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.GitBranch
 import com.pocketworker.app.core.git.GitFileChange
 import com.pocketworker.app.core.git.GitRemote
-import com.pocketworker.app.core.git.GitStatusSummary
+import com.pocketworker.app.core.git.GitStashEntry
+import com.pocketworker.app.core.git.GitTag
+import com.pocketworker.app.ui.common.formatShortTimestamp
 
 @Composable
 fun GitControlTab(
     state: WorkspaceUiState,
     onInitGit: () -> Unit,
+    onToggleViewAsTree: () -> Unit,
     onFetch: (String) -> Unit,
-    onPull: (String) -> Unit,
-    onPush: (String) -> Unit,
+    onPull: (remote: String, rebase: Boolean) -> Unit,
+    onPush: (remote: String, force: Boolean) -> Unit,
+    onSync: (remote: String) -> Unit,
     onStageFile: (String) -> Unit,
     onStageAll: () -> Unit,
     onUnstageFile: (String) -> Unit,
     onUnstageAll: () -> Unit,
     onDiscardFile: (String) -> Unit,
+    onDiscardAll: () -> Unit,
     onViewDiff: (relativePath: String, staged: Boolean) -> Unit,
-    onCommit: (message: String, amend: Boolean, pushAfter: Boolean) -> Unit,
+    onCommit: (message: String, amend: Boolean, pushAfter: Boolean, stageAllFirst: Boolean) -> Unit,
     onCheckoutBranch: (String) -> Unit,
     onCreateBranch: (name: String, startPoint: String?, checkout: Boolean) -> Unit,
     onRenameBranch: (oldName: String, newName: String) -> Unit,
@@ -86,6 +93,15 @@ fun GitControlTab(
     onAddRemote: (name: String, url: String) -> Unit,
     onUpdateRemote: (name: String, newUrl: String) -> Unit,
     onRemoveRemote: (name: String) -> Unit,
+    onCreateStash: (message: String?, includeUntracked: Boolean) -> Unit,
+    onApplyStash: (index: Int) -> Unit,
+    onPopStash: (index: Int) -> Unit,
+    onDropStash: (index: Int) -> Unit,
+    onClearStashes: () -> Unit,
+    onCreateTag: (name: String, message: String?) -> Unit,
+    onDeleteTag: (name: String) -> Unit,
+    onPushTags: (remote: String) -> Unit,
+    onClearGitOutputLogs: () -> Unit,
     onOpenCredentialsDialog: () -> Unit,
     onOpenAuthorDialog: () -> Unit
 ) {
@@ -112,11 +128,14 @@ fun GitControlTab(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "Этот проект был создан без Git. Инициализируйте репозиторий, чтобы управлять ветками, коммитами и синхронизацией.",
+                    text = "Этот репозиторий пока без Git. Инициализируйте его, чтобы работать с изменениями, ветками и синхронизацией.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Button(onClick = onInitGit) {
+                Button(
+                    onClick = onInitGit,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
                     Text("Инициализировать Git (ветка main)")
                 }
             }
@@ -127,94 +146,532 @@ fun GitControlTab(
     var commitMessage by remember { mutableStateOf("") }
     var amendCommit by remember { mutableStateOf(false) }
 
+    var stagedExpanded by remember { mutableStateOf(true) }
+    var changesExpanded by remember { mutableStateOf(true) }
+    var stashExpanded by remember { mutableStateOf(true) }
+
+    var showActionSheet by remember { mutableStateOf(false) }
+    var showBranchPicker by remember { mutableStateOf(false) }
+    var showCommitMenu by remember { mutableStateOf(false) }
+
     var showCreateBranchDialog by remember { mutableStateOf(false) }
     var branchToRename by remember { mutableStateOf<GitBranch?>(null) }
-    var branchToDelete by remember { mutableStateOf<GitBranch?>(null) }
-    var branchToMerge by remember { mutableStateOf<GitBranch?>(null) }
+
+    var showPullFromDialog by remember { mutableStateOf(false) }
+    var showPushToDialog by remember { mutableStateOf(false) }
+
     var fileToDiscard by remember { mutableStateOf<GitFileChange?>(null) }
+    var showDiscardAllConfirm by remember { mutableStateOf(false) }
+    var forcePushRemote by remember { mutableStateOf<String?>(null) }
 
     var showAddRemoteDialog by remember { mutableStateOf(false) }
     var remoteToEdit by remember { mutableStateOf<GitRemote?>(null) }
     var remoteToDelete by remember { mutableStateOf<GitRemote?>(null) }
 
+    var stashDialogIncludeUntracked by remember { mutableStateOf<Boolean?>(null) }
+    var stashToDrop by remember { mutableStateOf<GitStashEntry?>(null) }
+    var showClearStashesConfirm by remember { mutableStateOf(false) }
+
+    var showCreateTagDialog by remember { mutableStateOf(false) }
+    var tagToDelete by remember { mutableStateOf<GitTag?>(null) }
+    var showGitOutputDialog by remember { mutableStateOf(false) }
+
     val primaryRemote = state.remotes.firstOrNull { it.name == "origin" }?.name
         ?: state.remotes.firstOrNull()?.name
-    val localBranches = state.branches.filter { !it.isRemote }
-    val remoteBranches = state.branches.filter { it.isRemote }
+    val hasRemote = primaryRemote != null
+
+    val canCommitStaged = commitMessage.isNotBlank() && (status.stagedChanges.isNotEmpty() || amendCommit)
+    val canStageAndCommit = commitMessage.isNotBlank() &&
+        (status.stagedChanges.isNotEmpty() || status.unstagedChanges.isNotEmpty())
+    val canPrimaryCommit = commitMessage.isNotBlank() &&
+        (status.stagedChanges.isNotEmpty() || status.unstagedChanges.isNotEmpty() || amendCommit)
+
+    fun submitCommit(pushAfter: Boolean, stageAllFirst: Boolean) {
+        val msg = commitMessage.trim()
+        if (msg.isEmpty()) return
+        onCommit(msg, amendCommit, pushAfter, stageAllFirst)
+        commitMessage = ""
+        amendCommit = false
+    }
 
     LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        // 1. Status & Cloud Sync Card
-        item {
-            SyncStatusCard(
-                status = status,
-                primaryRemote = primaryRemote,
-                onFetch = { primaryRemote?.let(onFetch) },
-                onPull = { primaryRemote?.let(onPull) },
-                onPush = { primaryRemote?.let(onPush) }
-            )
-        }
-
-        // 2. Working Tree Changes & Commit Card
-        item {
-            ChangesAndCommitCard(
-                status = status,
-                commitMessage = commitMessage,
-                onCommitMessageChange = { commitMessage = it },
-                amend = amendCommit,
-                onAmendChange = { amendCommit = it },
-                hasRemote = primaryRemote != null,
-                onStageFile = onStageFile,
-                onStageAll = onStageAll,
-                onUnstageFile = onUnstageFile,
-                onUnstageAll = onUnstageAll,
-                onRequestDiscard = { fileToDiscard = it },
-                onViewDiff = onViewDiff,
-                onCommit = { pushAfter ->
-                    val msg = commitMessage.trim()
-                    if (msg.isNotEmpty()) {
-                        onCommit(msg, amendCommit, pushAfter)
-                        commitMessage = ""
-                        amendCommit = false
+        // 1. VS Code-inspired Source Control header bar
+        item(key = "sc_header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Branch selector pill (opens Checkout to...)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 46.dp)
+                        .clickable { showBranchPicker = true }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AccountTree,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = status.currentBranch ?: "HEAD",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (hasRemote && !status.isUnborn) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "↑${status.aheadCount} ↓${status.behindCount}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Выбрать ветку",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
-            )
+
+                // "..." VS Code More Actions button
+                FilledTonalIconButton(
+                    onClick = { showActionSheet = true },
+                    modifier = Modifier.size(46.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreHoriz,
+                        contentDescription = "Меню Git"
+                    )
+                }
+            }
         }
 
-        // 3. Branches Card
-        item {
-            BranchesSectionCard(
-                currentBranch = status.currentBranch,
-                isUnborn = status.isUnborn,
-                localBranches = localBranches,
-                remoteBranches = remoteBranches,
-                onNewBranchClick = { showCreateBranchDialog = true },
-                onCheckoutBranch = onCheckoutBranch,
-                onRenameBranch = { branchToRename = it },
-                onMergeBranch = { branchToMerge = it },
-                onDeleteBranch = { branchToDelete = it }
-            )
+        // 2. Commit Message + Large Finger-Friendly Split Commit Button (VS Code style)
+        item(key = "sc_commit_box") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = commitMessage,
+                    onValueChange = { commitMessage = it },
+                    placeholder = { Text("Сообщение коммита...") },
+                    minLines = 2,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (amendCommit && !status.isUnborn) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.clickable { amendCommit = false }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Edit,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Режим Amend (дополнить последний коммит)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Отключить Amend",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Split Commit Button
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    val primaryColor = if (canPrimaryCommit) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                    val contentColor = if (canPrimaryCommit) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    }
+
+                    val commitLabel = when {
+                        amendCommit -> "Commit (Amend)"
+                        status.stagedChanges.isNotEmpty() -> "Commit (${status.stagedChanges.size})"
+                        status.unstagedChanges.isNotEmpty() -> "Commit All (${status.unstagedChanges.size})"
+                        else -> "Commit"
+                    }
+
+                    Surface(
+                        color = primaryColor,
+                        contentColor = contentColor,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .clickable(enabled = canPrimaryCommit) {
+                                        val shouldStageAll = !amendCommit && status.stagedChanges.isEmpty()
+                                        submitCommit(pushAfter = false, stageAllFirst = shouldStageAll)
+                                    },
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = commitLabel,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .fillMaxHeight()
+                                    .padding(vertical = 10.dp)
+                            ) {
+                                Surface(
+                                    color = contentColor.copy(alpha = 0.35f),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {}
+                            }
+
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .width(54.dp)
+                                    .fillMaxHeight()
+                                    .clickable { showCommitMenu = true }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                                    contentDescription = "Варианты коммита",
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showCommitMenu,
+                        onDismissRequest = { showCommitMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Commit (подготовленные)") },
+                            leadingIcon = { Icon(Icons.Rounded.Check, contentDescription = null) },
+                            enabled = canCommitStaged,
+                            onClick = {
+                                showCommitMenu = false
+                                submitCommit(pushAfter = false, stageAllFirst = false)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Stage All & Commit") },
+                            leadingIcon = { Icon(Icons.Rounded.DoneAll, contentDescription = null) },
+                            enabled = canStageAndCommit,
+                            onClick = {
+                                showCommitMenu = false
+                                submitCommit(pushAfter = false, stageAllFirst = true)
+                            }
+                        )
+                        if (hasRemote) {
+                            DropdownMenuItem(
+                                text = { Text("Commit & Push") },
+                                leadingIcon = { Icon(Icons.Rounded.CloudUpload, contentDescription = null) },
+                                enabled = canPrimaryCommit,
+                                onClick = {
+                                    showCommitMenu = false
+                                    val shouldStageAll = !amendCommit && status.stagedChanges.isEmpty()
+                                    submitCommit(pushAfter = true, stageAllFirst = shouldStageAll)
+                                }
+                            )
+                        }
+                        if (!status.isUnborn) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (amendCommit) "Отключить Amend" else "Commit (Amend)")
+                                },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    showCommitMenu = false
+                                    amendCommit = !amendCommit
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
 
-        // 4. Cloud Remotes & Settings Card
-        item {
-            RemotesAndSettingsCard(
-                remotes = state.remotes,
-                status = status,
-                hasProjectCredentials = state.repoCredentials != null,
-                hasDefaultCredentials = state.hasFallbackCredentials,
-                onAddRemoteClick = { showAddRemoteDialog = true },
-                onEditRemoteClick = { remoteToEdit = it },
-                onDeleteRemoteClick = { remoteToDelete = it },
-                onFetchRemote = onFetch,
-                onPushRemote = onPush,
-                onOpenCredentialsDialog = onOpenCredentialsDialog,
-                onOpenAuthorDialog = onOpenAuthorDialog
-            )
+        // 3. Staged Changes Section
+        if (status.stagedChanges.isNotEmpty()) {
+            item(key = "sc_staged_section") {
+                ChangesSectionCard(
+                    title = "Подготовлено (Staged)",
+                    count = status.stagedChanges.size,
+                    expanded = stagedExpanded,
+                    onToggleExpanded = { stagedExpanded = !stagedExpanded },
+                    headerActions = {
+                        IconButton(
+                            onClick = onUnstageAll,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Remove,
+                                contentDescription = "Убрать все из индекса",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                ) {
+                    ChangesListOrTreeContent(
+                        changes = status.stagedChanges,
+                        asTree = state.viewChangesAsTree,
+                        primaryActionIcon = Icons.Rounded.Remove,
+                        primaryActionDesc = "Убрать из индекса",
+                        onRowClick = { onViewDiff(it.path, true) },
+                        onPrimaryAction = { onUnstageFile(it.path) },
+                        onDiscardAction = null
+                    )
+                }
+            }
         }
+
+        // 4. Working Changes Section
+        item(key = "sc_changes_section") {
+            ChangesSectionCard(
+                title = "Изменения (Changes)",
+                count = status.unstagedChanges.size,
+                expanded = changesExpanded,
+                onToggleExpanded = { changesExpanded = !changesExpanded },
+                headerActions = {
+                    if (status.unstagedChanges.isNotEmpty()) {
+                        IconButton(
+                            onClick = { showDiscardAllConfirm = true },
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Restore,
+                                contentDescription = "Откатить все изменения",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = onStageAll,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "Добавить все в индекс",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            ) {
+                if (status.unstagedChanges.isEmpty()) {
+                    Text(
+                        text = if (status.stagedChanges.isEmpty()) {
+                            "Рабочая директория чиста"
+                        } else {
+                            "Нет неподготовленных изменений"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp)
+                    )
+                } else {
+                    ChangesListOrTreeContent(
+                        changes = status.unstagedChanges,
+                        asTree = state.viewChangesAsTree,
+                        primaryActionIcon = Icons.Rounded.Add,
+                        primaryActionDesc = "Добавить в индекс",
+                        onRowClick = { onViewDiff(it.path, false) },
+                        onPrimaryAction = { onStageFile(it.path) },
+                        onDiscardAction = { fileToDiscard = it }
+                    )
+                }
+            }
+        }
+
+        // 5. Stashes Section (shown cleanly whenever stashes exist)
+        if (state.stashes.isNotEmpty()) {
+            item(key = "sc_stashes_section") {
+                ChangesSectionCard(
+                    title = "Stash (Отложенные)",
+                    count = state.stashes.size,
+                    expanded = stashExpanded,
+                    onToggleExpanded = { stashExpanded = !stashExpanded },
+                    headerActions = {
+                        TextButton(onClick = { onPopStash(0) }) {
+                            Text("Pop")
+                        }
+                    }
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        state.stashes.forEachIndexed { idx, stash ->
+                            if (idx > 0) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                    modifier = Modifier.padding(horizontal = 14.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Archive,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "stash@{${stash.index}} • ${stash.message}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatShortTimestamp(stash.timestampMillis),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onPopStash(stash.index) },
+                                    modifier = Modifier.size(42.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.VerticalAlignTop,
+                                        contentDescription = "Pop stash",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { stashToDrop = stash },
+                                    modifier = Modifier.size(42.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Удалить stash",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // VS Code "..." Bottom Action Sheet
+    if (showActionSheet) {
+        GitActionSheet(
+            state = state,
+            status = status,
+            primaryRemote = primaryRemote,
+            amendCommit = amendCommit,
+            canCommitStaged = canCommitStaged,
+            canStageAndCommit = canStageAndCommit,
+            onDismiss = { showActionSheet = false },
+            onToggleViewAsTree = onToggleViewAsTree,
+            onPull = onPull,
+            onRequestPullFrom = { showPullFromDialog = true },
+            onPush = onPush,
+            onRequestPushTo = { showPushToDialog = true },
+            onRequestForcePush = { remote -> forcePushRemote = remote },
+            onFetch = onFetch,
+            onSync = onSync,
+            onCommitStaged = { pushAfter -> submitCommit(pushAfter = pushAfter, stageAllFirst = false) },
+            onStageAndCommit = { submitCommit(pushAfter = false, stageAllFirst = true) },
+            onToggleAmend = { amendCommit = !amendCommit },
+            onStageAll = onStageAll,
+            onUnstageAll = onUnstageAll,
+            onRequestDiscardAll = { showDiscardAllConfirm = true },
+            onAddRemoteClick = { showAddRemoteDialog = true },
+            onEditRemoteClick = { remoteToEdit = it },
+            onDeleteRemoteClick = { remoteToDelete = it },
+            onOpenStashDialog = { includeUntracked ->
+                stashDialogIncludeUntracked = includeUntracked
+            },
+            onPopStash = onPopStash,
+            onApplyStash = onApplyStash,
+            onDropStash = { stashToDrop = it },
+            onRequestClearStashes = { showClearStashesConfirm = true },
+            onCreateTagClick = { showCreateTagDialog = true },
+            onDeleteTagClick = { tagToDelete = it },
+            onPushTags = onPushTags,
+            onShowGitOutput = { showGitOutputDialog = true },
+            onOpenCredentialsDialog = onOpenCredentialsDialog,
+            onOpenAuthorDialog = onOpenAuthorDialog
+        )
+    }
+
+    if (showBranchPicker) {
+        BranchPickerSheet(
+            branches = state.branches,
+            isUnborn = status.isUnborn,
+            onDismiss = { showBranchPicker = false },
+            onSelectBranch = { branch ->
+                if (!branch.isCurrent) {
+                    onCheckoutBranch(branch.fullName)
+                }
+            },
+            onCreateBranchClick = { showCreateBranchDialog = true },
+            onRenameBranchClick = { branch -> branchToRename = branch }
+        )
     }
 
     if (showCreateBranchDialog) {
@@ -233,42 +690,21 @@ fun GitControlTab(
         )
     }
 
-    branchToDelete?.let { branch ->
-        AlertDialog(
-            onDismissRequest = { branchToDelete = null },
-            title = { Text("Удалить ветку «${branch.name}»?") },
-            text = { Text("Локальная ветка будет удалена. Неслитые изменения могут быть потеряны.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onDeleteBranch(branch.name)
-                        branchToDelete = null
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Удалить") }
-            },
-            dismissButton = {
-                TextButton(onClick = { branchToDelete = null }) { Text("Отмена") }
-            }
+    if (showPullFromDialog) {
+        RemoteSelectorDialog(
+            title = "Pull from...",
+            remotes = state.remotes,
+            onDismiss = { showPullFromDialog = false },
+            onSelect = { remote -> onPull(remote.name, false) }
         )
     }
 
-    branchToMerge?.let { branch ->
-        AlertDialog(
-            onDismissRequest = { branchToMerge = null },
-            title = { Text("Слить ветку?") },
-            text = {
-                Text("Влить изменения из «${branch.name}» в текущую ветку «${status.currentBranch}»?")
-            },
-            confirmButton = {
-                Button(onClick = {
-                    onMergeBranch(branch.name)
-                    branchToMerge = null
-                }) { Text("Выполнить Merge") }
-            },
-            dismissButton = {
-                TextButton(onClick = { branchToMerge = null }) { Text("Отмена") }
-            }
+    if (showPushToDialog) {
+        RemoteSelectorDialog(
+            title = "Push to...",
+            remotes = state.remotes,
+            onDismiss = { showPushToDialog = false },
+            onSelect = { remote -> onPush(remote.name, false) }
         )
     }
 
@@ -290,6 +726,50 @@ fun GitControlTab(
             },
             dismissButton = {
                 TextButton(onClick = { fileToDiscard = null }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (showDiscardAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDiscardAllConfirm = false },
+            title = { Text("Откатить все изменения?") },
+            text = {
+                Text("Все локальные изменения в отслеживаемых файлах будут сброшены, а новые (untracked) файлы — удалены.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDiscardAll()
+                        showDiscardAllConfirm = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Откатить всё") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardAllConfirm = false }) { Text("Отмена") }
+            }
+        )
+    }
+
+    forcePushRemote?.let { remote ->
+        AlertDialog(
+            onDismissRequest = { forcePushRemote = null },
+            title = { Text("Выполнить Force Push?") },
+            text = {
+                Text("Удалённая ветка в «$remote» будет принудительно перезаписана вашей локальной историей.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onPush(remote, true)
+                        forcePushRemote = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Force Push") }
+            },
+            dismissButton = {
+                TextButton(onClick = { forcePushRemote = null }) { Text("Отмена") }
             }
         )
     }
@@ -329,88 +809,160 @@ fun GitControlTab(
             }
         )
     }
+
+    stashDialogIncludeUntracked?.let { initialUntracked ->
+        CreateStashDialog(
+            initialIncludeUntracked = initialUntracked,
+            onDismiss = { stashDialogIncludeUntracked = null },
+            onCreate = { message, includeUntracked ->
+                onCreateStash(message, includeUntracked)
+            }
+        )
+    }
+
+    stashToDrop?.let { stash ->
+        AlertDialog(
+            onDismissRequest = { stashToDrop = null },
+            title = { Text("Удалить stash@{${stash.index}}?") },
+            text = { Text("Отложенные изменения «${stash.message}» будут безвозвратно удалены.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDropStash(stash.index)
+                        stashToDrop = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { stashToDrop = null }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (showClearStashesConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearStashesConfirm = false },
+            title = { Text("Очистить все Stash?") },
+            text = { Text("Все сохранённые записи Stash (${state.stashes.size}) будут удалены.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onClearStashes()
+                        showClearStashesConfirm = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Очистить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearStashesConfirm = false }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (showCreateTagDialog) {
+        CreateTagDialog(
+            onDismiss = { showCreateTagDialog = false },
+            onCreate = { name, msg -> onCreateTag(name, msg) }
+        )
+    }
+
+    tagToDelete?.let { tag ->
+        AlertDialog(
+            onDismissRequest = { tagToDelete = null },
+            title = { Text("Удалить тег «${tag.name}»?") },
+            text = { Text("Локальный тег будет удалён из репозитория.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteTag(tag.name)
+                        tagToDelete = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { tagToDelete = null }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (showGitOutputDialog) {
+        GitOutputDialog(
+            logs = state.gitOutputLogs,
+            onClear = onClearGitOutputLogs,
+            onDismiss = { showGitOutputDialog = false }
+        )
+    }
 }
 
 @Composable
-private fun SyncStatusCard(
-    status: GitStatusSummary,
-    primaryRemote: String?,
-    onFetch: () -> Unit,
-    onPull: () -> Unit,
-    onPush: () -> Unit
+private fun ChangesSectionCard(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    headerActions: @Composable () -> Unit,
+    content: @Composable () -> Unit
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 50.dp)
+                    .clickable(onClick = onToggleExpanded)
+                    .padding(start = 10.dp, end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Rounded.AccountTree,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.Rounded.ExpandMore
+                    } else {
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    color = if (count > 0) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = count.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (count > 0) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = status.currentBranch ?: "HEAD",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = when {
-                                status.isUnborn -> "Ветка без коммитов"
-                                status.isDetachedHead -> "Detached HEAD"
-                                primaryRemote != null -> "Remote: $primaryRemote (↑${status.aheadCount} ↓${status.behindCount})"
-                                else -> "Локальный репозиторий (remote не привязан)"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
+                headerActions()
             }
 
-            if (primaryRemote != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onFetch,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Rounded.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Fetch")
-                    }
-                    OutlinedButton(
-                        onClick = onPull,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Pull")
-                    }
-                    Button(
-                        onClick = onPush,
-                        enabled = !status.isUnborn,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Rounded.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Push")
-                    }
+            AnimatedVisibility(visible = expanded) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    content()
                 }
             }
         }
@@ -418,151 +970,85 @@ private fun SyncStatusCard(
 }
 
 @Composable
-private fun ChangesAndCommitCard(
-    status: GitStatusSummary,
-    commitMessage: String,
-    onCommitMessageChange: (String) -> Unit,
-    amend: Boolean,
-    onAmendChange: (Boolean) -> Unit,
-    hasRemote: Boolean,
-    onStageFile: (String) -> Unit,
-    onStageAll: () -> Unit,
-    onUnstageFile: (String) -> Unit,
-    onUnstageAll: () -> Unit,
-    onRequestDiscard: (GitFileChange) -> Unit,
-    onViewDiff: (String, Boolean) -> Unit,
-    onCommit: (pushAfter: Boolean) -> Unit
+private fun ChangesListOrTreeContent(
+    changes: List<GitFileChange>,
+    asTree: Boolean,
+    primaryActionIcon: ImageVector,
+    primaryActionDesc: String,
+    onRowClick: (GitFileChange) -> Unit,
+    onPrimaryAction: (GitFileChange) -> Unit,
+    onDiscardAction: ((GitFileChange) -> Unit)?
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "Изменения и коммит",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            // Staged section
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Подготовлено (Staged): ${status.stagedChanges.size}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                if (status.stagedChanges.isNotEmpty()) {
-                    TextButton(onClick = onUnstageAll) {
-                        Text("Убрать все")
-                    }
-                }
-            }
-
-            if (status.stagedChanges.isEmpty()) {
-                Text(
-                    text = "Нет файлов в индексе",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                status.stagedChanges.forEach { change ->
-                    WorkingFileRow(
-                        change = change,
-                        onRowClick = { onViewDiff(change.path, true) },
-                        primaryActionIcon = Icons.Rounded.Remove,
-                        primaryActionDesc = "Убрать из индекса",
-                        onPrimaryAction = { onUnstageFile(change.path) },
-                        onDiscardAction = null
+    if (!asTree) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            changes.forEachIndexed { idx, change ->
+                if (idx > 0) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f),
+                        modifier = Modifier.padding(horizontal = 14.dp)
                     )
                 }
-            }
-
-            HorizontalDivider()
-
-            // Unstaged section
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Рабочие изменения: ${status.unstagedChanges.size}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                WorkingFileRow(
+                    change = change,
+                    showParentDir = true,
+                    indentStart = false,
+                    onRowClick = { onRowClick(change) },
+                    primaryActionIcon = primaryActionIcon,
+                    primaryActionDesc = primaryActionDesc,
+                    onPrimaryAction = { onPrimaryAction(change) },
+                    onDiscardAction = onDiscardAction?.let { cb -> { cb(change) } }
                 )
-                if (status.unstagedChanges.isNotEmpty()) {
-                    TextButton(onClick = onStageAll) {
-                        Text("Добавить все")
-                    }
-                }
             }
-
-            if (status.unstagedChanges.isEmpty()) {
-                Text(
-                    text = "Рабочая директория чиста",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                status.unstagedChanges.forEach { change ->
-                    WorkingFileRow(
-                        change = change,
-                        onRowClick = { onViewDiff(change.path, false) },
-                        primaryActionIcon = Icons.Rounded.Add,
-                        primaryActionDesc = "Добавить в индекс",
-                        onPrimaryAction = { onStageFile(change.path) },
-                        onDiscardAction = { onRequestDiscard(change) }
+        }
+    } else {
+        val grouped = remember(changes) {
+            changes.groupBy { change ->
+                change.path.substringBeforeLast('/', "")
+            }.toSortedMap(compareBy<String> { it.isNotEmpty() }.thenBy { it.lowercase() })
+        }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            grouped.entries.forEachIndexed { groupIdx, (folder, items) ->
+                if (groupIdx > 0) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f),
+                        modifier = Modifier.padding(horizontal = 14.dp)
                     )
                 }
-            }
-
-            HorizontalDivider()
-
-            OutlinedTextField(
-                value = commitMessage,
-                onValueChange = onCommitMessageChange,
-                label = { Text("Сообщение коммита") },
-                placeholder = { Text("Опишите внесённые изменения...") },
-                minLines = 2,
-                maxLines = 4,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            if (!status.isUnborn) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onAmendChange(!amend) }
-                ) {
-                    Checkbox(checked = amend, onCheckedChange = onAmendChange)
-                    Text("Amend (дополнить последний коммит)", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
-            val canCommit = commitMessage.isNotBlank() && (status.stagedChanges.isNotEmpty() || amend)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onCommit(false) },
-                    enabled = canCommit,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Commit")
-                }
-                if (hasRemote) {
-                    OutlinedButton(
-                        onClick = { onCommit(true) },
-                        enabled = canCommit,
-                        modifier = Modifier.weight(1f)
+                if (folder.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Commit & Push")
+                        Icon(
+                            imageVector = Icons.Rounded.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = folder,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
+                }
+                items.forEach { change ->
+                    WorkingFileRow(
+                        change = change,
+                        showParentDir = false,
+                        indentStart = folder.isNotEmpty(),
+                        onRowClick = { onRowClick(change) },
+                        primaryActionIcon = primaryActionIcon,
+                        primaryActionDesc = primaryActionDesc,
+                        onPrimaryAction = { onPrimaryAction(change) },
+                        onDiscardAction = onDiscardAction?.let { cb -> { cb(change) } }
+                    )
                 }
             }
         }
@@ -572,409 +1058,75 @@ private fun ChangesAndCommitCard(
 @Composable
 private fun WorkingFileRow(
     change: GitFileChange,
+    showParentDir: Boolean,
+    indentStart: Boolean,
     onRowClick: () -> Unit,
-    primaryActionIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    primaryActionIcon: ImageVector,
     primaryActionDesc: String,
     onPrimaryAction: () -> Unit,
     onDiscardAction: (() -> Unit)?
 ) {
+    val fileName = change.path.substringAfterLast('/')
+    val parentDir = change.path.substringBeforeLast('/', "")
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 52.dp)
             .clickable(onClick = onRowClick)
-            .padding(vertical = 4.dp),
+            .padding(
+                start = if (indentStart) 28.dp else 14.dp,
+                end = 6.dp,
+                top = 6.dp,
+                bottom = 6.dp
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
         GitChangeBadge(changeType = change.changeType)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = change.path,
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = fileName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (showParentDir && parentDir.isNotEmpty()) {
+                Text(
+                    text = parentDir,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         if (onDiscardAction != null) {
-            IconButton(onClick = onDiscardAction, modifier = Modifier.size(32.dp)) {
+            IconButton(
+                onClick = onDiscardAction,
+                modifier = Modifier.size(44.dp)
+            ) {
                 Icon(
                     imageVector = Icons.Rounded.Restore,
                     contentDescription = "Откатить",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
-        IconButton(onClick = onPrimaryAction, modifier = Modifier.size(32.dp)) {
+        IconButton(
+            onClick = onPrimaryAction,
+            modifier = Modifier.size(44.dp)
+        ) {
             Icon(
                 imageVector = primaryActionIcon,
                 contentDescription = primaryActionDesc,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(22.dp)
             )
-        }
-    }
-}
-
-@Composable
-private fun BranchesSectionCard(
-    currentBranch: String?,
-    isUnborn: Boolean,
-    localBranches: List<GitBranch>,
-    remoteBranches: List<GitBranch>,
-    onNewBranchClick: () -> Unit,
-    onCheckoutBranch: (String) -> Unit,
-    onRenameBranch: (GitBranch) -> Unit,
-    onMergeBranch: (GitBranch) -> Unit,
-    onDeleteBranch: (GitBranch) -> Unit
-) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Ветки",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                OutlinedButton(
-                    onClick = onNewBranchClick,
-                    enabled = !isUnborn,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Новая")
-                }
-            }
-
-            if (localBranches.isEmpty()) {
-                Text(
-                    text = if (isUnborn) {
-                        "Текущая ветка: ${currentBranch ?: "main"} (создастся после первого коммита)"
-                    } else {
-                        "Локальных веток нет"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                Text(
-                    text = "Локальные (${localBranches.size})",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                localBranches.forEach { branch ->
-                    BranchRowItem(
-                        branch = branch,
-                        onCheckout = { onCheckoutBranch(branch.fullName) },
-                        onRename = { onRenameBranch(branch) },
-                        onMerge = { onMergeBranch(branch) },
-                        onDelete = { onDeleteBranch(branch) }
-                    )
-                }
-            }
-
-            if (remoteBranches.isNotEmpty()) {
-                HorizontalDivider()
-                Text(
-                    text = "Удалённые (${remoteBranches.size})",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                remoteBranches.forEach { branch ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onCheckoutBranch(branch.fullName) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Cloud,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = branch.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            text = "Checkout",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun BranchRowItem(
-    branch: GitBranch,
-    onCheckout: () -> Unit,
-    onRename: () -> Unit,
-    onMerge: () -> Unit,
-    onDelete: () -> Unit
-) {
-    var menuExpanded by remember { mutableStateOf(false) }
-
-    Surface(
-        color = if (branch.isCurrent) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-        },
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !branch.isCurrent, onClick = onCheckout)
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = if (branch.isCurrent) Icons.Rounded.Check else Icons.Rounded.AccountTree,
-                contentDescription = null,
-                tint = if (branch.isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = branch.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = if (branch.isCurrent) FontWeight.Bold else FontWeight.Normal
-                )
-                if (branch.upstreamName != null) {
-                    Text(
-                        text = "-> ${branch.upstreamName} (↑${branch.aheadCount} ↓${branch.behindCount})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Box {
-                IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Действия с веткой",
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
-                    if (!branch.isCurrent) {
-                        DropdownMenuItem(
-                            text = { Text("Переключиться (Checkout)") },
-                            onClick = {
-                                menuExpanded = false
-                                onCheckout()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Влить в текущую (Merge)") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.CallMerge, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                onMerge()
-                            }
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("Переименовать") },
-                        leadingIcon = { Icon(Icons.Rounded.DriveFileRenameOutline, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onRename()
-                        }
-                    )
-                    if (!branch.isCurrent) {
-                        DropdownMenuItem(
-                            text = { Text("Удалить ветку") },
-                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                onDelete()
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RemotesAndSettingsCard(
-    remotes: List<GitRemote>,
-    status: GitStatusSummary,
-    hasProjectCredentials: Boolean,
-    hasDefaultCredentials: Boolean,
-    onAddRemoteClick: () -> Unit,
-    onEditRemoteClick: (GitRemote) -> Unit,
-    onDeleteRemoteClick: (GitRemote) -> Unit,
-    onFetchRemote: (String) -> Unit,
-    onPushRemote: (String) -> Unit,
-    onOpenCredentialsDialog: () -> Unit,
-    onOpenAuthorDialog: () -> Unit
-) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Облачный Git (Remotes)",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                OutlinedButton(
-                    onClick = onAddRemoteClick,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Добавить")
-                }
-            }
-
-            if (remotes.isEmpty()) {
-                Text(
-                    text = "Удалённые репозитории не настроены. Нажмите «Добавить», чтобы привязать GitHub/GitLab URL.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                remotes.forEach { remote ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Cloud,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = remote.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(
-                                    onClick = { onEditRemoteClick(remote) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Edit, contentDescription = "Изменить", modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(
-                                    onClick = { onDeleteRemoteClick(remote) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", modifier = Modifier.size(18.dp))
-                                }
-                            }
-                            Text(
-                                text = remote.fetchUrl,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { onFetchRemote(remote.name) }) {
-                                    Text("Fetch ${remote.name}")
-                                }
-                                TextButton(
-                                    onClick = { onPushRemote(remote.name) },
-                                    enabled = !status.isUnborn
-                                ) {
-                                    Text("Push ${remote.name}")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            HorizontalDivider()
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenCredentialsDialog)
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Rounded.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Токен доступа (PAT / пароль)", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        text = when {
-                            hasProjectCredentials -> "Задан отдельный токен репозитория"
-                            hasDefaultCredentials -> "Используется токен проекта или по умолчанию"
-                            else -> "Не задан (только публичное чтение)"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenAuthorDialog)
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Rounded.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Автор коммитов", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        text = "${status.authorName} <${status.authorEmail}>",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }

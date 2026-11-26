@@ -62,3 +62,6 @@ captures/
 # OS-specific
 .DS_Store
 Thumbs.db
+
+# Node dependencies for syntax checker bundle builder
+syntax-checker-js/node_modules/

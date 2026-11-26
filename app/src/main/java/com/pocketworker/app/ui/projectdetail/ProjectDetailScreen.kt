@@ -1,5 +1,6 @@
 package com.pocketworker.app.ui.projectdetail
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AccountTree
@@ -22,12 +24,9 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -41,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,28 +50,38 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.RepoCardInfo
-import com.pocketworker.app.ui.common.CredentialsEditorDialog
+import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
 import com.pocketworker.app.ui.common.OnLifecycleResume
+import com.pocketworker.app.ui.common.WorkspaceBackdrop
+import com.pocketworker.app.ui.common.backdropCardBorderColor
+import com.pocketworker.app.ui.common.backdropCardContainerColor
 import com.pocketworker.app.ui.common.formatShortTimestamp
+import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProjectDetailScreen(
     viewModel: ProjectDetailViewModel,
+    animatedBackgroundEnabled: Boolean,
     onBack: () -> Unit,
-    onOpenRepo: (repoId: String) -> Unit
+    onOpenRepo: (repoId: String) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val isDark = LocalIsDarkTheme.current
 
     var showAddChoiceSheet by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
+    var showAddGroupDialog by remember { mutableStateOf(false) }
     var showCreateRepoDialog by remember { mutableStateOf(false) }
-    var showCredentialsDialog by remember { mutableStateOf(false) }
     var repoToDelete by remember { mutableStateOf<RepoCardInfo?>(null) }
 
     OnLifecycleResume {
@@ -86,79 +96,93 @@ fun ProjectDetailScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К проектам")
-                    }
-                },
-                title = {
-                    Column {
-                        Text(
-                            text = state.project?.name ?: "Проект",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "Репозитории (${state.repos.size})",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showCredentialsDialog = true }) {
-                        Icon(Icons.Rounded.Key, contentDescription = "Токен проекта")
-                    }
-                    IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Обновить")
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showAddChoiceSheet = true },
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("Добавить репозиторий") }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when {
-                state.isLoading && state.repos.isEmpty() -> {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-                state.repos.isEmpty() -> {
-                    EmptyReposPlaceholder(
-                        projectName = state.project?.name ?: "проекте",
-                        onAddClick = { showAddChoiceSheet = true },
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                else -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = 12.dp,
-                            bottom = 96.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(state.repos, key = { it.entry.id }) { card ->
-                            RepoCard(
-                                info = card,
-                                onClick = { onOpenRepo(card.entry.id) },
-                                onDeleteClick = { repoToDelete = card }
+    WorkspaceBackdrop(animatedCubesEnabled = animatedBackgroundEnabled) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            topBar = {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                    ),
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К проектам")
+                        }
+                    },
+                    title = {
+                        Column {
+                            Text(
+                                text = state.project?.name ?: "Проект",
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            Text(
+                                text = "Репозитории (${state.repos.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    actions = {
+                        AnimatedRefreshIconButton(
+                            isRefreshing = state.isLoading,
+                            onClick = { viewModel.refresh() },
+                            contentDescription = "Обновить"
+                        )
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                        }
+                    }
+                )
+            },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = { showAddChoiceSheet = true },
+                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                    text = { Text("Добавить репозиторий") }
+                )
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) }
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                when {
+                    state.isLoading && state.repos.isEmpty() -> {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
+                    state.repos.isEmpty() -> {
+                        EmptyReposPlaceholder(
+                            projectName = state.project?.name ?: "проекте",
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 12.dp,
+                                bottom = 96.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(state.repos, key = { it.entry.id }) { card ->
+                                RepoCard(
+                                    info = card,
+                                    isDark = isDark,
+                                    onClick = { onOpenRepo(card.entry.id) },
+                                    onDeleteClick = { repoToDelete = card }
+                                )
+                            }
                         }
                     }
                 }
@@ -174,10 +198,50 @@ fun ProjectDetailScreen(
                 viewModel.clearCloneError()
                 showCloneDialog = true
             },
+            onAddGroupClick = {
+                showAddChoiceSheet = false
+                viewModel.resetGroupDialogState()
+                showAddGroupDialog = true
+            },
             onCreateClick = {
                 showAddChoiceSheet = false
                 viewModel.clearCreateRepoError()
                 showCreateRepoDialog = true
+            }
+        )
+    }
+
+    if (showAddGroupDialog) {
+        AddGroupSheet(
+            state = state,
+            fallbackCredentials = state.projectCredentials ?: state.defaultCredentials,
+            onClearError = { viewModel.clearGroupError() },
+            onDiscover = { url, useAuth, user, token ->
+                viewModel.discoverGroupRepositories(
+                    url = url,
+                    useAuth = useAuth,
+                    username = user,
+                    token = token
+                )
+            },
+            onToggleRepo = { repoId -> viewModel.toggleDiscoveredRepoSelection(repoId) },
+            onSetAllSelected = { selected -> viewModel.setAllDiscoveredReposSelected(selected) },
+            onCloneSelected = { useAuth, user, token, saveCreds ->
+                viewModel.cloneSelectedGroupRepositories(
+                    useAuth = useAuth,
+                    username = user,
+                    token = token,
+                    saveCredentialsForRepos = saveCreds,
+                    onAllDone = {
+                        viewModel.resetGroupDialogState()
+                        showAddGroupDialog = false
+                    }
+                )
+            },
+            onCancelClone = { viewModel.cancelGroupClone() },
+            onDismiss = {
+                viewModel.resetGroupDialogState()
+                showAddGroupDialog = false
             }
         )
     }
@@ -239,16 +303,6 @@ fun ProjectDetailScreen(
         )
     }
 
-    if (showCredentialsDialog) {
-        CredentialsEditorDialog(
-            title = "Токен проекта",
-            description = "Общий токен для всех репозиториев проекта «${state.project?.name ?: ""}». Используется, если у конкретного репозитория не задан свой токен.",
-            currentCredentials = state.projectCredentials,
-            onDismiss = { showCredentialsDialog = false },
-            onSave = { user, token -> viewModel.saveProjectCredentials(user, token) }
-        )
-    }
-
     repoToDelete?.let { card ->
         AlertDialog(
             onDismissRequest = { repoToDelete = null },
@@ -281,7 +335,6 @@ fun ProjectDetailScreen(
 @Composable
 private fun EmptyReposPlaceholder(
     projectName: String,
-    onAddClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -300,31 +353,31 @@ private fun EmptyReposPlaceholder(
             style = MaterialTheme.typography.titleLarge
         )
         Text(
-            text = "Добавьте сюда репозитории (например, client, backend, admin, services): клонируйте по Git-ссылке или создайте новый.",
+            text = "Добавьте сюда репозитории (например, client, backend, admin, services): клонируйте по Git-ссылке, загрузите группу или создайте новый.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        TextButton(onClick = onAddClick) {
-            Icon(Icons.Rounded.Add, contentDescription = null)
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Добавить репозиторий")
-        }
     }
 }
 
 @Composable
-private fun RepoCard(
+internal fun RepoCard(
     info: RepoCardInfo,
+    isDark: Boolean,
     onClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    interactive: Boolean = true
 ) {
-    Card(
+    val cardShape = RoundedCornerShape(18.dp)
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            .clip(cardShape)
+            .then(if (interactive) Modifier.clickable(onClick = onClick) else Modifier),
+        color = backdropCardContainerColor(isDark),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = cardShape,
+        border = BorderStroke(1.dp, backdropCardBorderColor(isDark))
     ) {
         Column(
             modifier = Modifier
@@ -336,21 +389,32 @@ private fun RepoCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Folder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = info.entry.name,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(
                     onClick = onDeleteClick,
+                    enabled = interactive,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
@@ -403,11 +467,21 @@ private fun RepoCard(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         },
+                        contentColor = if (dirtyTotal > 0) {
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
                             text = statusLabel,
                             style = MaterialTheme.typography.labelMedium,
+                            color = if (dirtyTotal > 0) {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }

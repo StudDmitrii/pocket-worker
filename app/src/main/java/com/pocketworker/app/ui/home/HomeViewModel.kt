@@ -16,13 +16,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class HomeTab {
-    PROJECTS,
-    AGENTS
-}
-
 data class HomeUiState(
-    val activeTab: HomeTab = HomeTab.PROJECTS,
     val projects: List<ProjectSummary> = emptyList(),
     val isLoading: Boolean = true,
     val isCreatingProject: Boolean = false,
@@ -43,10 +37,6 @@ class HomeViewModel(
 
     init {
         refreshProjects()
-    }
-
-    fun setActiveTab(tab: HomeTab) {
-        _uiState.update { it.copy(activeTab = tab) }
     }
 
     fun refreshProjects() {

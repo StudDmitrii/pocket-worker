@@ -5,7 +5,9 @@ data class WorkspaceProject(
     val name: String,
     val directoryPath: String,
     val createdAt: Long,
-    val description: String = ""
+    val description: String = "",
+    val authorName: String? = null,
+    val authorEmail: String? = null
 )
 
 data class ProjectSummary(
@@ -136,4 +138,19 @@ data class PullResultInfo(
     val isSuccessful: Boolean,
     val summary: String,
     val fetchSummary: String? = null
+)
+
+data class GitStashEntry(
+    val index: Int,
+    val commitId: String,
+    val message: String,
+    val timestampMillis: Long
+)
+
+data class GitTag(
+    val name: String,
+    val fullName: String,
+    val targetCommitId: String?,
+    val isAnnotated: Boolean,
+    val message: String? = null
 )

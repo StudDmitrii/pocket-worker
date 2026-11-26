@@ -3,9 +3,9 @@ package com.pocketworker.app.ui.workspace
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,13 +17,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Sell
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -38,8 +47,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,21 +65,29 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketworker.app.core.git.CommitDetail
 import com.pocketworker.app.core.git.FileChangeType
+import com.pocketworker.app.core.git.GitBranch
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitRemote
+import com.pocketworker.app.ui.common.FormFieldShape
+import com.pocketworker.app.ui.common.FormOptionCard
+import com.pocketworker.app.ui.common.PocketFormDialog
+import com.pocketworker.app.ui.common.appSwitchColors
+import com.pocketworker.app.ui.common.formTextFieldColors
 import com.pocketworker.app.ui.common.formatShortTimestamp
 import com.pocketworker.app.ui.theme.GitSemanticColors
+import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 
 @Composable
 fun DiffViewerDialog(
     state: DiffDialogState,
     onDismiss: () -> Unit
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = LocalIsDarkTheme.current
     val lines = remember(state.diffText) { state.diffText.lines() }
 
     AlertDialog(
@@ -138,8 +157,12 @@ fun CommitDetailSheet(
 ) {
     val clipboard = LocalClipboardManager.current
     val commit = detail.commit
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -248,7 +271,7 @@ fun CommitDetailSheet(
 
 @Composable
 fun GitChangeBadge(changeType: FileChangeType) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = LocalIsDarkTheme.current
     val (label, color) = when (changeType) {
         FileChangeType.ADDED -> "A" to if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
         FileChangeType.MODIFIED -> "M" to if (isDark) GitSemanticColors.ModifiedDark else GitSemanticColors.ModifiedLight
@@ -281,50 +304,59 @@ fun CreateBranchDialog(
     var branchName by remember { mutableStateOf("") }
     var checkout by remember { mutableStateOf(true) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.AccountTree, contentDescription = null) },
-        title = { Text("Новая ветка") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "От базы: $startPointLabel",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedTextField(
-                    value = branchName,
-                    onValueChange = { branchName = it },
-                    label = { Text("Имя ветки") },
-                    placeholder = { Text("feature/my-change") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { checkout = !checkout }
-                ) {
-                    Checkbox(checked = checkout, onCheckedChange = { checkout = it })
-                    Text("Сразу переключиться на ветку", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        },
-        confirmButton = {
+    PocketFormDialog(
+        title = "Новая ветка",
+        subtitle = "От базы: $startPointLabel",
+        icon = Icons.Rounded.AccountTree,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
             Button(
                 onClick = {
                     onCreate(branchName, checkout)
                     onDismiss()
                 },
-                enabled = branchName.isNotBlank()
+                enabled = branchName.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
             ) {
                 Text("Создать")
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = branchName,
+            onValueChange = { branchName = it },
+            label = { Text("Имя ветки") },
+            placeholder = { Text("feature/my-change") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        FormOptionCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { checkout = !checkout }
+            ) {
+                Text(
+                    text = "Сразу переключиться на ветку",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Switch(
+                    checked = checkout,
+                    onCheckedChange = { checkout = it },
+                    colors = appSwitchColors()
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -335,33 +367,36 @@ fun RenameBranchDialog(
 ) {
     var newName by remember { mutableStateOf(currentName) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Переименовать ветку") },
-        text = {
-            OutlinedTextField(
-                value = newName,
-                onValueChange = { newName = it },
-                label = { Text("Новое имя ветки") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
+    PocketFormDialog(
+        title = "Переименовать ветку",
+        subtitle = "Текущее имя: $currentName",
+        icon = Icons.Rounded.DriveFileRenameOutline,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
             Button(
                 onClick = {
                     onRename(newName)
                     onDismiss()
                 },
-                enabled = newName.isNotBlank() && newName.trim() != currentName
+                enabled = newName.isNotBlank() && newName.trim() != currentName,
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
             ) {
                 Text("Сохранить")
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = newName,
+            onValueChange = { newName = it },
+            label = { Text("Новое имя ветки") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -374,45 +409,47 @@ fun RemoteEditorDialog(
     var url by remember { mutableStateOf(existingRemote?.fetchUrl ?: "") }
     val isEdit = existingRemote != null
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-        title = { Text(if (isEdit) "Редактировать remote" else "Добавить remote") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Имя remote") },
-                    enabled = !isEdit,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("Ссылка на Git-репозиторий") },
-                    placeholder = { Text("https://github.com/user/repo.git") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
+    PocketFormDialog(
+        title = if (isEdit) "Редактировать remote" else "Добавить remote",
+        subtitle = "Подключение к удалённому Git-репозиторию",
+        icon = Icons.Rounded.Cloud,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
             Button(
                 onClick = {
                     onSave(name, url)
                     onDismiss()
                 },
-                enabled = name.isNotBlank() && url.isNotBlank()
+                enabled = name.isNotBlank() && url.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
             ) {
                 Text("Сохранить")
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Имя remote") },
+            enabled = !isEdit,
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text("Ссылка на Git-репозиторий") },
+            placeholder = { Text("https://github.com/user/repo.git") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -426,59 +463,63 @@ fun ProjectCredentialsDialog(
     var token by remember { mutableStateOf(currentCredentials?.tokenOrPassword ?: "") }
     var showToken by remember { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.Key, contentDescription = null) },
-        title = { Text("Авторизация репозитория") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = if (hasDefaultCredentials) {
-                        "Оставьте поле токена пустым, чтобы использовать токен проекта или токен по умолчанию."
-                    } else {
-                        "Укажите логин и Personal Access Token (PAT) для fetch, pull и push."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("Имя пользователя") },
-                    placeholder = { Text("x-access-token") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = token,
-                    onValueChange = { token = it },
-                    label = { Text("Personal Access Token") },
-                    singleLine = true,
-                    visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { showToken = !showToken }) {
-                            Icon(
-                                imageVector = if (showToken) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                contentDescription = null
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                onSave(username, token)
-                onDismiss()
-            }) {
+    PocketFormDialog(
+        title = "Авторизация репозитория",
+        subtitle = "Для операций fetch, pull и push",
+        icon = Icons.Rounded.Key,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+            Button(
+                onClick = {
+                    onSave(username, token)
+                    onDismiss()
+                },
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
+            ) {
                 Text("Сохранить")
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
         }
-    )
+    ) {
+        Text(
+            text = if (hasDefaultCredentials) {
+                "Оставьте поле токена пустым, чтобы использовать токен проекта или токен по умолчанию."
+            } else {
+                "Укажите логин и Personal Access Token (PAT) для fetch, pull и push."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("Имя пользователя") },
+            placeholder = { Text("x-access-token") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = token,
+            onValueChange = { token = it },
+            label = { Text("Personal Access Token") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showToken = !showToken }) {
+                    Icon(
+                        imageVector = if (showToken) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                        contentDescription = null
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -486,52 +527,637 @@ fun AuthorConfigDialog(
     currentName: String,
     currentEmail: String,
     onDismiss: () -> Unit,
-    onSave: (name: String, email: String, saveGlobally: Boolean) -> Unit
+    onSave: (name: String, email: String, saveGlobally: Boolean) -> Unit,
+    onResetToDefault: (() -> Unit)? = null
 ) {
     var name by remember { mutableStateOf(currentName) }
     var email by remember { mutableStateOf(currentEmail) }
-    var saveGlobally by remember { mutableStateOf(true) }
+    var saveGlobally by remember { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.Person, contentDescription = null) },
-        title = { Text("Автор коммитов") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("user.name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    label = { Text("user.email") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { saveGlobally = !saveGlobally }
+    PocketFormDialog(
+        title = "Автор коммитов",
+        subtitle = "Подпись коммитов в этом репозитории",
+        icon = Icons.Rounded.Person,
+        onDismiss = onDismiss,
+        footerActions = {
+            if (onResetToDefault != null) {
+                TextButton(
+                    onClick = {
+                        onResetToDefault()
+                        onDismiss()
+                    }
                 ) {
-                    Checkbox(checked = saveGlobally, onCheckedChange = { saveGlobally = it })
-                    Text("Сохранить также глобально", style = MaterialTheme.typography.bodyMedium)
+                    Text("Сбросить", color = MaterialTheme.colorScheme.error)
                 }
             }
-        },
-        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
             Button(
                 onClick = {
                     onSave(name, email, saveGlobally)
                     onDismiss()
                 },
-                enabled = name.isNotBlank() && email.isNotBlank()
+                enabled = name.isNotBlank() && email.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
             ) {
                 Text("Сохранить")
             }
+        }
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("user.name") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("user.email") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        FormOptionCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { saveGlobally = !saveGlobally }
+            ) {
+                Text(
+                    text = "Сохранить также глобально",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Switch(
+                    checked = saveGlobally,
+                    onCheckedChange = { saveGlobally = it },
+                    colors = appSwitchColors()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CreateStashDialog(
+    initialIncludeUntracked: Boolean = true,
+    onDismiss: () -> Unit,
+    onCreate: (message: String, includeUntracked: Boolean) -> Unit
+) {
+    var message by remember { mutableStateOf("") }
+    var includeUntracked by remember { mutableStateOf(initialIncludeUntracked) }
+
+    PocketFormDialog(
+        title = "Сохранить в Stash",
+        subtitle = "Временно отложить текущие изменения",
+        icon = Icons.Rounded.Archive,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+            Button(
+                onClick = {
+                    onCreate(message, includeUntracked)
+                    onDismiss()
+                },
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
+            ) {
+                Text("В Stash")
+            }
+        }
+    ) {
+        OutlinedTextField(
+            value = message,
+            onValueChange = { message = it },
+            label = { Text("Описание (необязательно)") },
+            placeholder = { Text("Например: WIP авторизация") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        FormOptionCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { includeUntracked = !includeUntracked }
+            ) {
+                Text(
+                    text = "Включать новые (untracked) файлы",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Switch(
+                    checked = includeUntracked,
+                    onCheckedChange = { includeUntracked = it },
+                    colors = appSwitchColors()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CreateTagDialog(
+    onDismiss: () -> Unit,
+    onCreate: (name: String, message: String) -> Unit
+) {
+    var tagName by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf("") }
+
+    PocketFormDialog(
+        title = "Новый тег",
+        subtitle = "Пометка текущего коммита версией",
+        icon = Icons.Rounded.Sell,
+        onDismiss = onDismiss,
+        footerActions = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+            Button(
+                onClick = {
+                    onCreate(tagName, message)
+                    onDismiss()
+                },
+                enabled = tagName.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
+            ) {
+                Text("Создать")
+            }
+        }
+    ) {
+        OutlinedTextField(
+            value = tagName,
+            onValueChange = { tagName = it },
+            label = { Text("Имя тега") },
+            placeholder = { Text("v1.0.0") },
+            singleLine = true,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = message,
+            onValueChange = { message = it },
+            label = { Text("Аннотация (необязательно)") },
+            placeholder = { Text("Релиз новой версии") },
+            minLines = 2,
+            maxLines = 4,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BranchPickerSheet(
+    branches: List<GitBranch>,
+    isUnborn: Boolean,
+    onDismiss: () -> Unit,
+    onSelectBranch: (GitBranch) -> Unit,
+    onCreateBranchClick: () -> Unit,
+    onRenameBranchClick: (GitBranch) -> Unit
+) {
+    var search by remember { mutableStateOf("") }
+    val filtered = remember(branches, search) {
+        if (search.isBlank()) {
+            branches
+        } else {
+            val q = search.trim().lowercase()
+            branches.filter { it.name.lowercase().contains(q) }
+        }
+    }
+    val local = filtered.filter { !it.isRemote }
+    val remote = filtered.filter { it.isRemote }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Переключить ветку",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                OutlinedButton(
+                    onClick = {
+                        onDismiss()
+                        onCreateBranchClick()
+                    },
+                    enabled = !isUnborn,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Новая")
+                }
+            }
+
+            if (branches.size > 4) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    placeholder = { Text("Поиск ветки...") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (local.isNotEmpty()) {
+                    item(key = "header_local") {
+                        Text(
+                            text = "Локальные ветки",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    items(local, key = { it.fullName }) { branch ->
+                        Surface(
+                            color = if (branch.isCurrent) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelectBranch(branch)
+                                    onDismiss()
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (branch.isCurrent) Icons.Rounded.Check else Icons.Rounded.AccountTree,
+                                    contentDescription = null,
+                                    tint = if (branch.isCurrent) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = branch.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = if (branch.isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (branch.upstreamName != null) {
+                                        Text(
+                                            text = "${branch.upstreamName} (↑${branch.aheadCount} ↓${branch.behindCount})",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        onDismiss()
+                                        onRenameBranchClick(branch)
+                                    },
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DriveFileRenameOutline,
+                                        contentDescription = "Переименовать ветку ${branch.name}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (remote.isNotEmpty()) {
+                    item(key = "header_remote") {
+                        Text(
+                            text = "Удалённые ветки",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                    items(remote, key = { it.fullName }) { branch ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelectBranch(branch)
+                                    onDismiss()
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Cloud,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = branch.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (filtered.isEmpty()) {
+                    item(key = "empty_branches") {
+                        Text(
+                            text = if (isUnborn) {
+                                "Ветка создастся автоматически после первого коммита"
+                            } else {
+                                "Подходящие ветки не найдены"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BranchSelectorDialog(
+    title: String,
+    emptyText: String,
+    branches: List<GitBranch>,
+    onDismiss: () -> Unit,
+    onSelect: (GitBranch) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.AccountTree, contentDescription = null) },
+        title = { Text(title) },
+        text = {
+            if (branches.isEmpty()) {
+                Text(
+                    text = emptyText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(branches, key = { it.fullName }) { branch ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelect(branch)
+                                    onDismiss()
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AccountTree,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = branch.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть") }
+        }
+    )
+}
+
+@Composable
+fun GitOutputDialog(
+    logs: List<GitOutputLogEntry>,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Terminal, contentDescription = null) },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Git Output")
+                if (logs.isNotEmpty()) {
+                    Row {
+                        IconButton(
+                            onClick = {
+                                val fullLog = logs.joinToString("\n\n") { entry ->
+                                    "[${formatShortTimestamp(entry.timestampMillis)}] $ ${entry.command}\n${entry.output}"
+                                }
+                                clipboard.setText(AnnotatedString(fullLog))
+                            }
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Копировать лог")
+                        }
+                        IconButton(onClick = onClear) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Очистить лог")
+                        }
+                    }
+                }
+            }
+        },
+        text = {
+            if (logs.isEmpty()) {
+                Text(
+                    text = "Выполненные Git-команды и их вывод появятся здесь.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(logs) { entry ->
+                        Surface(
+                            color = if (entry.isError) {
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "${formatShortTimestamp(entry.timestampMillis)} • ${entry.command}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (entry.isError) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    }
+                                )
+                                Text(
+                                    text = entry.output,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть") }
+        }
+    )
+}
+
+@Composable
+fun RemoteSelectorDialog(
+    title: String,
+    remotes: List<GitRemote>,
+    onDismiss: () -> Unit,
+    onSelect: (GitRemote) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(remotes, key = { it.name }) { remote ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDismiss()
+                                onSelect(remote)
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Cloud,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = remote.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = remote.fetchUrl,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Отмена") }
         }

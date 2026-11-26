@@ -27,6 +27,25 @@ interface CredentialStore {
     fun saveDefaultCredentials(credentials: GitCredentials)
     fun clearDefaultCredentials()
 
+    fun getAiApiKey(provider: AiProvider): String?
+    fun saveAiApiKey(provider: AiProvider, apiKey: String)
+    fun clearAiApiKey(provider: AiProvider)
+
+    fun getAiProxyUrl(): String?
+    fun saveAiProxyUrl(proxyUrl: String)
+    fun clearAiProxyUrl()
+
+    fun getAllAiApiKeys(): Map<AiProvider, String> {
+        val map = LinkedHashMap<AiProvider, String>()
+        AiProvider.entries.forEach { provider ->
+            val key = getAiApiKey(provider)
+            if (!key.isNullOrBlank()) {
+                map[provider] = key
+            }
+        }
+        return map
+    }
+
     fun resolveForRepo(projectId: String, repoId: String?): GitCredentials? {
         return repoId?.let { getRepoCredentials(it) }
             ?: getProjectCredentials(projectId)
@@ -38,6 +57,8 @@ class InMemoryCredentialStore : CredentialStore {
     private val byRepo = mutableMapOf<String, GitCredentials>()
     private val byProject = mutableMapOf<String, GitCredentials>()
     private var defaultCreds: GitCredentials? = null
+    private val aiApiKeys = mutableMapOf<AiProvider, String>()
+    private var aiProxyUrl: String? = null
 
     override fun getRepoCredentials(repoId: String): GitCredentials? = byRepo[repoId]
 
@@ -67,6 +88,32 @@ class InMemoryCredentialStore : CredentialStore {
 
     override fun clearDefaultCredentials() {
         defaultCreds = null
+    }
+
+    override fun getAiApiKey(provider: AiProvider): String? = aiApiKeys[provider]
+
+    override fun saveAiApiKey(provider: AiProvider, apiKey: String) {
+        val clean = apiKey.trim()
+        if (clean.isEmpty()) {
+            aiApiKeys.remove(provider)
+        } else {
+            aiApiKeys[provider] = clean
+        }
+    }
+
+    override fun clearAiApiKey(provider: AiProvider) {
+        aiApiKeys.remove(provider)
+    }
+
+    override fun getAiProxyUrl(): String? = aiProxyUrl
+
+    override fun saveAiProxyUrl(proxyUrl: String) {
+        val clean = proxyUrl.trim()
+        aiProxyUrl = clean.ifEmpty { null }
+    }
+
+    override fun clearAiProxyUrl() {
+        aiProxyUrl = null
     }
 }
 
@@ -124,6 +171,60 @@ class KeystoreCredentialStore(context: Context) : CredentialStore {
     override fun clearDefaultCredentials() {
         prefs.edit().remove(KEY_DEFAULT).apply()
     }
+
+    override fun getAiApiKey(provider: AiProvider): String? {
+        if (provider == AiProvider.OPENROUTER || provider == AiProvider.GEMINI) {
+            migrateLegacyOpenRouterKeyIfNeeded()
+        }
+        return readEncrypted(aiKeyStorageKey(provider))?.tokenOrPassword
+    }
+
+    private fun migrateLegacyOpenRouterKeyIfNeeded() {
+        val legacyKey = readEncrypted(aiKeyStorageKey(AiProvider.GEMINI))?.tokenOrPassword
+        if (legacyKey != null && legacyKey.startsWith("sk-or-")) {
+            val existingOpenRouter = readEncrypted(aiKeyStorageKey(AiProvider.OPENROUTER))?.tokenOrPassword
+            if (existingOpenRouter.isNullOrBlank()) {
+                writeEncrypted(
+                    aiKeyStorageKey(AiProvider.OPENROUTER),
+                    GitCredentials(AiProvider.OPENROUTER.name.lowercase(), legacyKey)
+                )
+            }
+            prefs.edit().remove(aiKeyStorageKey(AiProvider.GEMINI)).apply()
+        }
+    }
+
+    override fun saveAiApiKey(provider: AiProvider, apiKey: String) {
+        val clean = apiKey.trim()
+        if (clean.isEmpty()) {
+            clearAiApiKey(provider)
+            return
+        }
+        writeEncrypted(aiKeyStorageKey(provider), GitCredentials(provider.name.lowercase(), clean))
+    }
+
+    override fun clearAiApiKey(provider: AiProvider) {
+        prefs.edit().remove(aiKeyStorageKey(provider)).apply()
+    }
+
+    override fun getAiProxyUrl(): String? {
+        return readEncrypted(KEY_AI_PROXY_URL)?.tokenOrPassword
+    }
+
+    override fun saveAiProxyUrl(proxyUrl: String) {
+        val clean = proxyUrl.trim()
+        if (clean.isEmpty()) {
+            clearAiProxyUrl()
+            return
+        }
+        writeEncrypted(KEY_AI_PROXY_URL, GitCredentials("proxy", clean))
+    }
+
+    override fun clearAiProxyUrl() {
+        prefs.edit().remove(KEY_AI_PROXY_URL).apply()
+    }
+
+    private fun aiKeyStorageKey(provider: AiProvider): String =
+        KEY_AI_API_KEY_PREFIX + provider.name.lowercase()
 
     private fun writeEncrypted(key: String, credentials: GitCredentials) {
         val json = JSONObject().apply {
@@ -190,6 +291,8 @@ class KeystoreCredentialStore(context: Context) : CredentialStore {
     companion object {
         private const val PREFS_NAME = "pocket_worker_credentials"
         private const val KEY_DEFAULT = "default_git_credentials"
+        private const val KEY_AI_API_KEY_PREFIX = "ai_agent_api_key_"
+        private const val KEY_AI_PROXY_URL = "ai_agent_proxy_url"
         private const val KEY_PROJECT_PREFIX = "project_creds_"
         private const val KEY_REPO_PREFIX = "repo_creds_"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"

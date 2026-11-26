@@ -16,9 +16,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -43,14 +41,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
+import com.pocketworker.app.ui.common.OnLifecycleResume
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkspaceScreen(
     viewModel: WorkspaceViewModel,
-    onBackToProjects: () -> Unit
+    onBackToProjects: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -58,6 +60,10 @@ fun WorkspaceScreen(
     var showCredentialsDialog by remember { mutableStateOf(false) }
     var showAuthorDialog by remember { mutableStateOf(false) }
     var commitIdForBranch by remember { mutableStateOf<String?>(null) }
+
+    OnLifecycleResume {
+        viewModel.loadAll()
+    }
 
     LaunchedEffect(state.errorMessage, state.infoMessage) {
         val msg = state.errorMessage ?: state.infoMessage
@@ -73,7 +79,8 @@ fun WorkspaceScreen(
             editorState = activeEditor,
             onContentChange = { viewModel.updateEditorContent(it) },
             onSave = { viewModel.saveEditorFile() },
-            onClose = { viewModel.closeFileEditor() }
+            onClose = { viewModel.closeFileEditor() },
+            onOpenSettings = onOpenSettings
         )
         return
     }
@@ -94,6 +101,7 @@ fun WorkspaceScreen(
                     Column {
                         Text(
                             text = state.project?.name ?: "Репозиторий",
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -141,16 +149,13 @@ fun WorkspaceScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showCredentialsDialog = true }) {
-                        Icon(Icons.Rounded.Key, contentDescription = "Токен доступа")
-                    }
-                    if (state.gitStatus?.isGitRepo == true) {
-                        IconButton(onClick = { showAuthorDialog = true }) {
-                            Icon(Icons.Rounded.Person, contentDescription = "Автор коммитов")
-                        }
-                    }
-                    IconButton(onClick = { viewModel.loadAll() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Обновить")
+                    AnimatedRefreshIconButton(
+                        isRefreshing = state.isLoading || state.isBusy,
+                        onClick = { viewModel.loadAll() },
+                        contentDescription = "Обновить"
+                    )
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
                     }
                 }
             )
@@ -217,14 +222,17 @@ fun WorkspaceScreen(
                     WorkspaceTab.GIT -> GitControlTab(
                         state = state,
                         onInitGit = { viewModel.initGitInProject() },
+                        onToggleViewAsTree = viewModel::toggleViewChangesAsTree,
                         onFetch = viewModel::fetch,
                         onPull = viewModel::pull,
-                        onPush = { remote -> viewModel.push(remoteName = remote) },
+                        onPush = { remote, force -> viewModel.push(remoteName = remote, force = force) },
+                        onSync = viewModel::syncRemote,
                         onStageFile = viewModel::stageFile,
                         onStageAll = viewModel::stageAll,
                         onUnstageFile = viewModel::unstageFile,
                         onUnstageAll = viewModel::unstageAll,
                         onDiscardFile = viewModel::discardFileChanges,
+                        onDiscardAll = viewModel::discardAllChanges,
                         onViewDiff = viewModel::openWorkingDiff,
                         onCommit = viewModel::commit,
                         onCheckoutBranch = viewModel::checkoutBranch,
@@ -235,6 +243,15 @@ fun WorkspaceScreen(
                         onAddRemote = viewModel::addRemote,
                         onUpdateRemote = viewModel::updateRemoteUrl,
                         onRemoveRemote = viewModel::removeRemote,
+                        onCreateStash = viewModel::createStash,
+                        onApplyStash = viewModel::applyStash,
+                        onPopStash = viewModel::popStash,
+                        onDropStash = viewModel::dropStash,
+                        onClearStashes = viewModel::clearStashes,
+                        onCreateTag = viewModel::createTag,
+                        onDeleteTag = viewModel::deleteTag,
+                        onPushTags = viewModel::pushTags,
+                        onClearGitOutputLogs = viewModel::clearGitOutputLogs,
                         onOpenCredentialsDialog = { showCredentialsDialog = true },
                         onOpenAuthorDialog = { showAuthorDialog = true }
                     )

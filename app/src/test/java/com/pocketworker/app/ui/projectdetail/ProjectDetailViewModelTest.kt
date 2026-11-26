@@ -1,8 +1,11 @@
 package com.pocketworker.app.ui.projectdetail
 
 import com.pocketworker.app.core.git.AndroidSystemReader
+import com.pocketworker.app.core.git.DiscoveredRepo
+import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.JGitEngine
+import com.pocketworker.app.core.git.RepoGroupDiscoveryService
 import com.pocketworker.app.core.storage.InMemoryCredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
 import com.pocketworker.app.ui.common.formatGitTransportError
@@ -108,5 +111,66 @@ class ProjectDetailViewModelTest {
 
         val notFoundMsg = formatGitTransportError(RuntimeException("404 Not Found"))
         assertTrue(notFoundMsg.contains("404"))
+    }
+
+    @Test
+    fun `group discovery and selective batch cloning adds only checked repositories`() = runTest(testDispatcher) {
+        val project = registry.createProject("Suite")
+
+        val bare1 = File(tempRoot, "repo-one.git")
+        val bare2 = File(tempRoot, "repo-two.git")
+        val bare3 = File(tempRoot, "repo-three.git")
+        listOf(bare1, bare2, bare3).forEach { dir ->
+            Git.init().setDirectory(dir).setBare(true).call().close()
+            // Add one commit so defaultBranch works cleanly
+            val seed = File(tempRoot, "seed-${dir.name}")
+            gitEngine.initProject(seed, initialBranch = "main", initGit = true, createReadmeAndCommit = true, remoteUrl = dir.toURI().toString())
+            gitEngine.push(seed, remoteName = "origin", branchName = "main")
+        }
+
+        val fakeDiscovery = object : RepoGroupDiscoveryService {
+            override fun discoverRepositories(groupUrl: String, credentials: GitCredentials?): List<DiscoveredRepo> {
+                return listOf(
+                    DiscoveredRepo("1", "repo-one", "org/repo-one", bare1.toURI().toString(), "main", "One", false),
+                    DiscoveredRepo("2", "repo-two", "org/repo-two", bare2.toURI().toString(), "main", "Two", false),
+                    DiscoveredRepo("3", "repo-three", "org/repo-three", bare3.toURI().toString(), "main", "Three", true)
+                )
+            }
+        }
+
+        val vm = ProjectDetailViewModel(
+            projectId = project.id,
+            gitEngine = gitEngine,
+            registry = registry,
+            credentialStore = credentialStore,
+            ioDispatcher = testDispatcher,
+            groupDiscoveryService = fakeDiscovery
+        )
+        advanceUntilIdle()
+
+        vm.discoverGroupRepositories("https://github.com/org", false, "", "")
+        advanceUntilIdle()
+
+        assertEquals(3, vm.uiState.value.discoveredRepos.size)
+        assertTrue(vm.uiState.value.discoveredRepos.all { it.selected })
+
+        // Uncheck repo-two
+        vm.toggleDiscoveredRepoSelection("2")
+        assertFalse(vm.uiState.value.discoveredRepos.first { it.repo.id == "2" }.selected)
+
+        var allDoneCalled = false
+        vm.cloneSelectedGroupRepositories(
+            useAuth = false,
+            username = "",
+            token = "",
+            saveCredentialsForRepos = false,
+            onAllDone = { allDoneCalled = true }
+        )
+        advanceUntilIdle()
+
+        assertTrue(allDoneCalled)
+        assertNull(vm.uiState.value.groupCloneError)
+        val savedRepos = registry.listRepositories(project.id).map { it.name }.toSet()
+        assertEquals(setOf("repo-one", "repo-three"), savedRepos)
     }
 }

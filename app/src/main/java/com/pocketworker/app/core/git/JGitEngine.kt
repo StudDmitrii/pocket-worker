@@ -16,8 +16,10 @@ import org.eclipse.jgit.lib.ProgressMonitor
 import org.eclipse.jgit.lib.Ref
 import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.revwalk.RevCommit
+import org.eclipse.jgit.revwalk.RevTag
 import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.transport.CredentialsProvider
+import org.eclipse.jgit.transport.PushResult
 import org.eclipse.jgit.transport.RefSpec
 import org.eclipse.jgit.transport.RemoteRefUpdate
 import org.eclipse.jgit.transport.URIish
@@ -379,6 +381,36 @@ class JGitEngine : GitEngine {
         }
     }
 
+    override fun discardAllChanges(repoDir: File) {
+        Git.open(repoDir).use { git ->
+            val repo = git.repository
+            val repoCanonical = repoDir.canonicalPath
+            val status = git.status().call()
+            val hasHead = repo.resolve(Constants.HEAD) != null
+
+            val pathsToDelete = if (hasHead) {
+                status.untracked
+            } else {
+                status.untracked + status.added
+            }
+
+            if (!hasHead) {
+                unstageAll(repoDir)
+            }
+
+            pathsToDelete.forEach { relPath ->
+                val target = File(repoDir, relPath)
+                if (target.exists() && target.canonicalPath.startsWith(repoCanonical)) {
+                    target.deleteRecursively()
+                }
+            }
+
+            if (hasHead) {
+                git.reset().setMode(ResetCommand.ResetType.HARD).call()
+            }
+        }
+    }
+
     override fun commit(
         repoDir: File,
         message: String,
@@ -611,12 +643,15 @@ class JGitEngine : GitEngine {
     override fun pull(
         repoDir: File,
         remoteName: String,
-        credentials: GitCredentials?
+        credentials: GitCredentials?,
+        rebase: Boolean
     ): PullResultInfo {
         Git.open(repoDir).use { git ->
             val repo = git.repository
             val currentBranch = repo.branch
-            val cmd = git.pull().setRemote(remoteName)
+            val cmd = git.pull()
+                .setRemote(remoteName)
+                .setRebase(rebase)
             if (currentBranch != null && BranchConfig(repo.config, currentBranch).trackingBranch == null) {
                 cmd.setRemoteBranchName(currentBranch)
             }
@@ -625,8 +660,8 @@ class JGitEngine : GitEngine {
             val mergeStatus = result.mergeResult?.mergeStatus?.toString()
             val fetchCount = result.fetchResult?.trackingRefUpdates?.size ?: 0
             val summary = when {
-                mergeStatus != null -> "Pull: $mergeStatus"
                 result.rebaseResult != null -> "Pull (rebase): ${result.rebaseResult.status}"
+                mergeStatus != null -> "Pull: $mergeStatus"
                 else -> if (result.isSuccessful) "Pull выполнен" else "Pull не выполнен"
             }
             return PullResultInfo(
@@ -641,7 +676,8 @@ class JGitEngine : GitEngine {
         repoDir: File,
         remoteName: String,
         branchName: String?,
-        credentials: GitCredentials?
+        credentials: GitCredentials?,
+        force: Boolean
     ): String {
         Git.open(repoDir).use { git ->
             val repo = git.repository
@@ -655,30 +691,10 @@ class JGitEngine : GitEngine {
             val cmd = git.push()
                 .setRemote(remoteName)
                 .setRefSpecs(refSpec)
+                .setForce(force)
             buildCredentialsProvider(credentials)?.let { cmd.setCredentialsProvider(it) }
             val results = cmd.call()
-
-            val errors = mutableListOf<String>()
-            val okMessages = mutableListOf<String>()
-            for (pushResult in results) {
-                for (update in pushResult.remoteUpdates) {
-                    when (update.status) {
-                        RemoteRefUpdate.Status.OK,
-                        RemoteRefUpdate.Status.UP_TO_DATE -> {
-                            okMessages.add("${Repository.shortenRefName(update.remoteName)}: ${update.status}")
-                        }
-                        else -> {
-                            errors.add(
-                                "${Repository.shortenRefName(update.remoteName)}: ${update.status}" +
-                                    (update.message?.let { " ($it)" } ?: "")
-                            )
-                        }
-                    }
-                }
-            }
-            if (errors.isNotEmpty()) {
-                throw IllegalStateException("Ошибка Push: ${errors.joinToString("; ")}")
-            }
+            val msg = validateAndFormatPushResults(results, remoteName, targetBranch)
 
             // Ensure upstream tracking is configured after a successful push
             val config = repo.config
@@ -688,11 +704,202 @@ class JGitEngine : GitEngine {
                 config.save()
             }
 
-            return if (okMessages.isEmpty()) {
-                "Push в $remoteName/$targetBranch выполнен"
-            } else {
-                "Push в $remoteName: ${okMessages.joinToString(", ")}"
+            return msg
+        }
+    }
+
+    override fun getStashes(repoDir: File): List<GitStashEntry> {
+        if (!isGitRepository(repoDir)) return emptyList()
+        Git.open(repoDir).use { git ->
+            return git.stashList().call().mapIndexed { index, commit ->
+                GitStashEntry(
+                    index = index,
+                    commitId = commit.id.name,
+                    message = commit.shortMessage,
+                    timestampMillis = commit.commitTime.toLong() * 1000L
+                )
             }
+        }
+    }
+
+    override fun createStash(
+        repoDir: File,
+        message: String?,
+        includeUntracked: Boolean
+    ): GitStashEntry? {
+        Git.open(repoDir).use { git ->
+            if (git.repository.resolve(Constants.HEAD) == null) {
+                throw IllegalStateException("Нельзя создать stash в репозитории без коммитов")
+            }
+            val cmd = git.stashCreate().setIncludeUntracked(includeUntracked)
+            val cleanMsg = message?.trim()?.ifEmpty { null }
+            if (cleanMsg != null) {
+                cmd.setWorkingDirectoryMessage(cleanMsg)
+            }
+            val commit = cmd.call() ?: return null
+            return GitStashEntry(
+                index = 0,
+                commitId = commit.id.name,
+                message = commit.shortMessage,
+                timestampMillis = commit.commitTime.toLong() * 1000L
+            )
+        }
+    }
+
+    override fun applyStash(repoDir: File, index: Int) {
+        Git.open(repoDir).use { git ->
+            git.stashApply()
+                .setStashRef("stash@{$index}")
+                .setRestoreIndex(true)
+                .setRestoreUntracked(true)
+                .call()
+        }
+    }
+
+    override fun popStash(repoDir: File, index: Int) {
+        Git.open(repoDir).use { git ->
+            git.stashApply()
+                .setStashRef("stash@{$index}")
+                .setRestoreIndex(true)
+                .setRestoreUntracked(true)
+                .call()
+            git.stashDrop()
+                .setStashRef(index)
+                .call()
+        }
+    }
+
+    override fun dropStash(repoDir: File, index: Int) {
+        Git.open(repoDir).use { git ->
+            git.stashDrop()
+                .setStashRef(index)
+                .call()
+        }
+    }
+
+    override fun clearStashes(repoDir: File) {
+        Git.open(repoDir).use { git ->
+            git.stashDrop()
+                .setAll(true)
+                .call()
+        }
+    }
+
+    override fun getTags(repoDir: File): List<GitTag> {
+        if (!isGitRepository(repoDir)) return emptyList()
+        Git.open(repoDir).use { git ->
+            val repo = git.repository
+            val refs = git.tagList().call()
+            RevWalk(repo).use { revWalk ->
+                return refs.map { ref ->
+                    val peeled = repo.refDatabase.peel(ref)
+                    val parsed = ref.objectId?.let { runCatching { revWalk.parseAny(it) }.getOrNull() }
+                    if (parsed is RevTag) {
+                        GitTag(
+                            name = Repository.shortenRefName(ref.name),
+                            fullName = ref.name,
+                            targetCommitId = (peeled.peeledObjectId ?: parsed.`object`?.id)?.name,
+                            isAnnotated = true,
+                            message = parsed.fullMessage.trim().ifBlank { null }
+                        )
+                    } else {
+                        GitTag(
+                            name = Repository.shortenRefName(ref.name),
+                            fullName = ref.name,
+                            targetCommitId = (peeled.peeledObjectId ?: ref.objectId)?.name,
+                            isAnnotated = false,
+                            message = null
+                        )
+                    }
+                }.sortedByDescending { it.name.lowercase() }
+            }
+        }
+    }
+
+    override fun createTag(
+        repoDir: File,
+        name: String,
+        message: String?,
+        authorName: String,
+        authorEmail: String
+    ) {
+        val cleanName = name.trim()
+        require(cleanName.isNotEmpty()) { "Имя тега не может быть пустым" }
+        Git.open(repoDir).use { git ->
+            if (git.repository.resolve(Constants.HEAD) == null) {
+                throw IllegalStateException("Нельзя создать тег в репозитории без коммитов")
+            }
+            val cleanMsg = message?.trim()?.ifEmpty { null }
+            val cmd = git.tag().setName(cleanName)
+            if (cleanMsg != null) {
+                cmd.setAnnotated(true)
+                    .setMessage(cleanMsg)
+                    .setTagger(
+                        PersonIdent(
+                            authorName.trim().ifEmpty { GitEngine.DEFAULT_AUTHOR_NAME },
+                            authorEmail.trim().ifEmpty { GitEngine.DEFAULT_AUTHOR_EMAIL }
+                        )
+                    )
+            } else {
+                cmd.setAnnotated(false)
+            }
+            cmd.call()
+        }
+    }
+
+    override fun deleteTag(repoDir: File, name: String) {
+        Git.open(repoDir).use { git ->
+            git.tagDelete()
+                .setTags(name)
+                .call()
+        }
+    }
+
+    override fun pushTags(
+        repoDir: File,
+        remoteName: String,
+        credentials: GitCredentials?
+    ): String {
+        Git.open(repoDir).use { git ->
+            val cmd = git.push()
+                .setRemote(remoteName)
+                .setPushTags()
+            buildCredentialsProvider(credentials)?.let { cmd.setCredentialsProvider(it) }
+            val results = cmd.call()
+            return validateAndFormatPushResults(results, remoteName, "теги")
+        }
+    }
+
+    private fun validateAndFormatPushResults(
+        results: Iterable<PushResult>,
+        remoteName: String,
+        fallbackTarget: String
+    ): String {
+        val errors = mutableListOf<String>()
+        val okMessages = mutableListOf<String>()
+        for (pushResult in results) {
+            for (update in pushResult.remoteUpdates) {
+                when (update.status) {
+                    RemoteRefUpdate.Status.OK,
+                    RemoteRefUpdate.Status.UP_TO_DATE -> {
+                        okMessages.add("${Repository.shortenRefName(update.remoteName)}: ${update.status}")
+                    }
+                    else -> {
+                        errors.add(
+                            "${Repository.shortenRefName(update.remoteName)}: ${update.status}" +
+                                (update.message?.let { " ($it)" } ?: "")
+                        )
+                    }
+                }
+            }
+        }
+        if (errors.isNotEmpty()) {
+            throw IllegalStateException("Ошибка Push: ${errors.joinToString("; ")}")
+        }
+        return if (okMessages.isEmpty()) {
+            "Push ($fallbackTarget) в $remoteName выполнен"
+        } else {
+            "Push в $remoteName: ${okMessages.joinToString(", ")}"
         }
     }
 
@@ -796,7 +1003,12 @@ class JGitEngine : GitEngine {
                 if (bytes.take(4096).any { it.toInt() == 0 }) {
                     return "Бинарный файл (${bytes.size} байт)"
                 }
-                val lines = String(bytes, StandardCharsets.UTF_8).lines()
+                val text = String(bytes, StandardCharsets.UTF_8)
+                val lines = if (text.isEmpty()) {
+                    emptyList()
+                } else {
+                    text.removeSuffix("\r\n").removeSuffix("\n").lines()
+                }
                 return buildString {
                     appendLine("--- /dev/null")
                     appendLine("+++ b/$relativePath")
@@ -871,6 +1083,33 @@ class JGitEngine : GitEngine {
         }
         Git.open(repoDir).use { git ->
             return readAuthorFromRepo(git.repository)
+        }
+    }
+
+    override fun getLocalAuthorConfig(repoDir: File): Pair<String, String>? {
+        if (!isGitRepository(repoDir)) return null
+        return runCatching {
+            Git.open(repoDir).use { git ->
+                val localConfigFile = File(git.repository.directory, "config")
+                val localOnly = org.eclipse.jgit.storage.file.FileBasedConfig(
+                    localConfigFile,
+                    org.eclipse.jgit.util.FS.DETECTED
+                )
+                localOnly.load()
+                val name = localOnly.getString("user", null, "name")?.trim().orEmpty()
+                val email = localOnly.getString("user", null, "email")?.trim().orEmpty()
+                if (name.isEmpty() && email.isEmpty()) null else (name to email)
+            }
+        }.getOrNull()
+    }
+
+    override fun clearLocalAuthorConfig(repoDir: File) {
+        if (!isGitRepository(repoDir)) return
+        Git.open(repoDir).use { git ->
+            val repoConfig = git.repository.config
+            repoConfig.unset("user", null, "name")
+            repoConfig.unset("user", null, "email")
+            repoConfig.save()
         }
     }
 

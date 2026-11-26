@@ -1,0 +1,25 @@
+{
+  "name": "pocketworker-syntax-checker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight offline AST syntax checker bundle for PocketWorker Android MCP (androidx.javascriptengine V8 sandbox)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node test/sandbox.test.mjs"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.0",
+    "css-tree": "^3.2.1",
+    "js-yaml": "^4.1.0",
+    "parse5": "^8.1.1",
+    "php-parser": "^3.7.0",
+    "smol-toml": "^1.9.1",
+    "sql-parser-cst": "^0.45.1",
+    "tree-sitter-wasms": "0.1.13",
+    "web-tree-sitter": "0.25.10"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

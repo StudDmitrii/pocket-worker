@@ -34,6 +34,59 @@ class ProjectRegistryTest {
     }
 
     @Test
+    fun `create project creates strictly one project without duplicating on reconcile`() {
+        val created = registry.createProject("My First App", "Mobile workspace")
+        val projects = registry.listProjects()
+
+        assertEquals(1, projects.size)
+        assertEquals(created.id, projects.first().id)
+        assertEquals("My First App", projects.first().name)
+        assertEquals("Mobile workspace", projects.first().description)
+
+        val second = registry.createProject("Backend")
+        assertEquals(2, registry.listProjects().size)
+        assertTrue(registry.listProjects().any { it.id == second.id })
+    }
+
+    @Test
+    fun `reconcile heals pre-existing duplicate project entries pointing to same directory`() {
+        val dir = File(registry.projectsRootDir, "my-app").apply { mkdirs() }
+        val duplicatedJson = JSONObject().apply {
+            put("version", 2)
+            put(
+                "projects",
+                JSONArray()
+                    .put(
+                        JSONObject().apply {
+                            put("id", "auto-discovered-id")
+                            put("name", "my-app")
+                            put("directoryPath", dir.absolutePath)
+                            put("createdAt", 100L)
+                            put("repositories", JSONArray())
+                        }
+                    )
+                    .put(
+                        JSONObject().apply {
+                            put("id", "real-project-id")
+                            put("name", "My App")
+                            put("description", "Real description")
+                            put("directoryPath", dir.absolutePath)
+                            put("createdAt", 200L)
+                            put("repositories", JSONArray())
+                        }
+                    )
+            )
+        }
+        File(tempRoot, "projects.json").writeText(duplicatedJson.toString(2))
+
+        val projects = registry.listProjects()
+        assertEquals(1, projects.size)
+        assertEquals("real-project-id", projects.first().id)
+        assertEquals("My App", projects.first().name)
+        assertEquals("Real description", projects.first().description)
+    }
+
+    @Test
     fun `create project and manage multiple repositories inside it`() {
         val project = registry.createProject("E-Commerce", "Client, Backend, Admin")
         assertTrue(File(project.directoryPath).exists())

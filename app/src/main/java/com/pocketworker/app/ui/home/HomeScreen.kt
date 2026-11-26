@@ -1,5 +1,6 @@
 package com.pocketworker.app.ui.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,11 +11,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CreateNewFolder
@@ -22,15 +25,11 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderCopy
-import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -41,16 +40,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -60,29 +59,42 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.ProjectSummary
 import com.pocketworker.app.core.git.WorkspaceProject
-import com.pocketworker.app.ui.common.CredentialsEditorDialog
+import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
+import com.pocketworker.app.ui.common.FormFieldShape
+import com.pocketworker.app.ui.common.FormOptionCard
 import com.pocketworker.app.ui.common.OnLifecycleResume
+import com.pocketworker.app.ui.common.PocketFormDialog
+import com.pocketworker.app.ui.common.WorkspaceBackdrop
+import com.pocketworker.app.ui.common.appSwitchColors
+import com.pocketworker.app.ui.common.backdropCardBorderColor
+import com.pocketworker.app.ui.common.backdropCardContainerColor
+import com.pocketworker.app.ui.common.formTextFieldColors
 import com.pocketworker.app.ui.common.formatShortTimestamp
+import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
-    onOpenProject: (String) -> Unit
+    animatedBackgroundEnabled: Boolean,
+    onOpenProject: (String) -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val isDark = LocalIsDarkTheme.current
 
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var projectToEdit by remember { mutableStateOf<WorkspaceProject?>(null) }
     var projectToDelete by remember { mutableStateOf<ProjectSummary?>(null) }
-    var showCredentialsDialog by remember { mutableStateOf(false) }
 
     OnLifecycleResume {
         viewModel.refreshProjects()
@@ -96,53 +108,49 @@ fun HomeScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("PocketWorker", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = if (state.activeTab == HomeTab.PROJECTS) {
-                                "Проекты"
-                            } else {
-                                "Агенты"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+    WorkspaceBackdrop(animatedCubesEnabled = animatedBackgroundEnabled) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            topBar = {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                    ),
+                    title = {
+                        Column {
+                            Text(
+                                text = "Проекты",
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (state.projects.isEmpty()) {
+                                    "Рабочая папка"
+                                } else {
+                                    "Все проекты (${state.projects.size})"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    actions = {
+                        AnimatedRefreshIconButton(
+                            isRefreshing = state.isLoading,
+                            onClick = { viewModel.refreshProjects() },
+                            contentDescription = "Обновить список"
                         )
-                    }
-                },
-                actions = {
-                    if (state.activeTab == HomeTab.PROJECTS) {
-                        IconButton(onClick = { showCredentialsDialog = true }) {
-                            Icon(Icons.Rounded.Key, contentDescription = "Токен Git по умолчанию")
-                        }
-                        IconButton(onClick = { viewModel.refreshProjects() }) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "Обновить список")
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
                         }
                     }
-                }
-            )
-        },
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = state.activeTab == HomeTab.PROJECTS,
-                    onClick = { viewModel.setActiveTab(HomeTab.PROJECTS) },
-                    icon = { Icon(Icons.Rounded.FolderCopy, contentDescription = null) },
-                    label = { Text("Проекты") }
                 )
-                NavigationBarItem(
-                    selected = state.activeTab == HomeTab.AGENTS,
-                    onClick = { viewModel.setActiveTab(HomeTab.AGENTS) },
-                    icon = { Icon(Icons.Rounded.SmartToy, contentDescription = null) },
-                    label = { Text("Агенты") }
-                )
-            }
-        },
-        floatingActionButton = {
-            if (state.activeTab == HomeTab.PROJECTS) {
+            },
+            floatingActionButton = {
                 ExtendedFloatingActionButton(
                     onClick = {
                         viewModel.clearCreateProjectError()
@@ -151,55 +159,48 @@ fun HomeScreen(
                     icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
                     text = { Text("Новый проект") }
                 )
-            }
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when (state.activeTab) {
-                HomeTab.PROJECTS -> {
-                    when {
-                        state.isLoading && state.projects.isEmpty() -> {
-                            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                        }
-                        state.projects.isEmpty() -> {
-                            EmptyWorkspaceProjectsPlaceholder(
-                                onCreateClick = {
-                                    viewModel.clearCreateProjectError()
-                                    showCreateProjectDialog = true
-                                },
-                                modifier = Modifier.align(Alignment.Center)
-                            )
-                        }
-                        else -> {
-                            LazyColumn(
-                                contentPadding = PaddingValues(
-                                    start = 16.dp,
-                                    end = 16.dp,
-                                    top = 12.dp,
-                                    bottom = 96.dp
-                                ),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                items(state.projects, key = { it.project.id }) { summary ->
-                                    WorkspaceProjectCard(
-                                        summary = summary,
-                                        onClick = { onOpenProject(summary.project.id) },
-                                        onEditClick = { projectToEdit = summary.project },
-                                        onDeleteClick = { projectToDelete = summary }
-                                    )
-                                }
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) }
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                when {
+                    state.isLoading && state.projects.isEmpty() -> {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
+                    state.projects.isEmpty() -> {
+                        EmptyWorkspaceProjectsPlaceholder(
+                            onCreateClick = {
+                                viewModel.clearCreateProjectError()
+                                showCreateProjectDialog = true
+                            },
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 12.dp,
+                                bottom = 96.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(state.projects, key = { it.project.id }) { summary ->
+                                WorkspaceProjectCard(
+                                    summary = summary,
+                                    isDark = isDark,
+                                    onClick = { onOpenProject(summary.project.id) },
+                                    onEditClick = { projectToEdit = summary.project },
+                                    onDeleteClick = { projectToDelete = summary }
+                                )
                             }
                         }
                     }
-                }
-                HomeTab.AGENTS -> {
-                    // Intentionally empty Agents tab for future features
-                    Box(modifier = Modifier.fillMaxSize())
                 }
             }
         }
@@ -247,16 +248,6 @@ fun HomeScreen(
                 viewModel.updateProject(target.id, name, desc)
                 projectToEdit = null
             }
-        )
-    }
-
-    if (showCredentialsDialog) {
-        CredentialsEditorDialog(
-            title = "Токен Git по умолчанию",
-            description = "Хранится в зашифрованном Android Keystore и используется, если у проекта и репозитория не задан отдельный токен.",
-            currentCredentials = state.defaultCredentials,
-            onDismiss = { showCredentialsDialog = false },
-            onSave = { user, token -> viewModel.saveDefaultCredentials(user, token) }
         )
     }
 
@@ -326,20 +317,26 @@ private fun EmptyWorkspaceProjectsPlaceholder(
 }
 
 @Composable
-private fun WorkspaceProjectCard(
+internal fun WorkspaceProjectCard(
     summary: ProjectSummary,
+    isDark: Boolean,
     onClick: () -> Unit,
     onEditClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    interactive: Boolean = true
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(18.dp)
 
-    Card(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            .clip(cardShape)
+            .then(if (interactive) Modifier.clickable(onClick = onClick) else Modifier),
+        color = backdropCardContainerColor(isDark),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = cardShape,
+        border = BorderStroke(1.dp, backdropCardBorderColor(isDark))
     ) {
         Column(
             modifier = Modifier
@@ -351,22 +348,36 @@ private fun WorkspaceProjectCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.FolderCopy,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.FolderCopy,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = summary.project.name,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
 
                 Box {
-                    IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(32.dp)) {
+                    IconButton(
+                        onClick = { if (interactive) menuExpanded = true },
+                        enabled = interactive,
+                        modifier = Modifier.size(32.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Rounded.MoreVert,
                             contentDescription = "Меню проекта",
@@ -426,11 +437,13 @@ private fun WorkspaceProjectCard(
                 if (summary.dirtyRepoCount > 0) {
                     Surface(
                         color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
                             text = "С изменениями: ${summary.dirtyRepoCount}",
                             style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -479,102 +492,130 @@ private fun ProjectFormDialog(
     var description by remember { mutableStateOf(initialDescription) }
     var openImmediately by remember { mutableStateOf(true) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.CreateNewFolder, contentDescription = null) },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (!errorMessage.isNullOrBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ErrorOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = errorMessage,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = {
-                        name = it
-                        onInputChanged()
-                    },
-                    label = { Text("Название проекта") },
-                    placeholder = { Text("Например: Shop Platform") },
-                    singleLine = true,
-                    enabled = !isSaving,
+    PocketFormDialog(
+        title = title,
+        subtitle = if (showOpenImmediatelyOption) {
+            "Папка-контейнер для ваших репозиториев"
+        } else {
+            "Измените название или заметку о проекте"
+        },
+        icon = if (showOpenImmediatelyOption) {
+            Icons.Rounded.CreateNewFolder
+        } else {
+            Icons.Rounded.DriveFileRenameOutline
+        },
+        onDismiss = onDismiss,
+        dismissEnabled = !isSaving,
+        pinnedBanner = if (!errorMessage.isNullOrBlank()) {
+            {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = {
-                        description = it
-                        onInputChanged()
-                    },
-                    label = { Text("Описание (необязательно)") },
-                    placeholder = { Text("Клиент, бэкенд, админка и сервисы") },
-                    maxLines = 3,
-                    enabled = !isSaving,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (showOpenImmediatelyOption) {
+                ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable(enabled = !isSaving) {
-                            openImmediately = !openImmediately
-                        }
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = openImmediately,
-                            onCheckedChange = { openImmediately = it },
-                            enabled = !isSaving
+                        Icon(
+                            imageVector = Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Сразу открыть проект",
-                            style = MaterialTheme.typography.bodyMedium
+                            text = errorMessage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
                 }
-
-                if (isSaving) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(name, description, openImmediately) },
-                enabled = !isSaving && name.isNotBlank()
-            ) {
-                Text(confirmLabel)
-            }
-        },
-        dismissButton = {
+        } else null,
+        footerActions = {
             TextButton(onClick = onDismiss, enabled = !isSaving) {
                 Text("Отмена")
             }
+            Button(
+                onClick = { onConfirm(name, description, openImmediately) },
+                enabled = !isSaving && name.isNotBlank(),
+                shape = FormFieldShape,
+                modifier = Modifier.heightIn(min = 44.dp)
+            ) {
+                Text(confirmLabel)
+            }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = {
+                name = it
+                onInputChanged()
+            },
+            label = { Text("Название проекта") },
+            placeholder = { Text("Например: Shop Platform") },
+            singleLine = true,
+            enabled = !isSaving,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        OutlinedTextField(
+            value = description,
+            onValueChange = {
+                description = it
+                onInputChanged()
+            },
+            label = { Text("Описание (необязательно)") },
+            placeholder = { Text("Клиент, бэкенд, админка и сервисы") },
+            minLines = 2,
+            maxLines = 4,
+            enabled = !isSaving,
+            shape = FormFieldShape,
+            colors = formTextFieldColors(),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        if (showOpenImmediatelyOption) {
+            FormOptionCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isSaving) {
+                            openImmediately = !openImmediately
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Сразу открыть проект",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Перейти к добавлению репозиториев после создания",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = openImmediately,
+                        onCheckedChange = { openImmediately = it },
+                        enabled = !isSaving,
+                        colors = appSwitchColors()
+                    )
+                }
+            }
+        }
+
+        if (isSaving) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+    }
 }
 
 private fun formatRepoCountLabel(count: Int): String {
