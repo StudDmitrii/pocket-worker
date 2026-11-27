@@ -7,11 +7,13 @@ import com.pocketworker.app.core.git.CloneProgress
 import com.pocketworker.app.core.git.DiscoveredRepo
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.HttpRepoGroupDiscoveryService
 import com.pocketworker.app.core.git.RepoCardInfo
 import com.pocketworker.app.core.git.RepoEntry
 import com.pocketworker.app.core.git.RepoGroupDiscoveryService
 import com.pocketworker.app.core.git.WorkspaceProject
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
 import com.pocketworker.app.ui.common.formatGitTransportError
@@ -35,6 +37,7 @@ data class DiscoveredRepoItem(
 data class ProjectDetailUiState(
     val project: WorkspaceProject? = null,
     val repos: List<RepoCardInfo> = emptyList(),
+    val newlyAddedRepoIds: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val isCloning: Boolean = false,
     val cloneProgress: CloneProgress? = null,
@@ -52,6 +55,7 @@ data class ProjectDetailUiState(
     val createRepoError: String? = null,
     val projectCredentials: GitCredentials? = null,
     val defaultCredentials: GitCredentials? = null,
+    val hasConnectedOAuthAccounts: Boolean = false,
     val errorMessage: String? = null,
     val infoMessage: String? = null
 )
@@ -62,7 +66,8 @@ class ProjectDetailViewModel(
     private val registry: ProjectRegistry,
     private val credentialStore: CredentialStore,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService()
+    private val groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService(),
+    private val oauthManager: GitOAuthManager? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProjectDetailUiState())
@@ -83,21 +88,26 @@ class ProjectDetailViewModel(
             val result = withContext(ioDispatcher) {
                 runCatching {
                     val project = registry.findProjectById(projectId)
-                        ?: throw IllegalStateException("Проект не найден")
+                        ?: throw IllegalStateException(AppLocale.current.projectErrNotFound)
                     val repos = registry.listRepositories(projectId)
                     val cards = repos.map { gitEngine.getRepoSummary(it) }
                     val projCreds = credentialStore.getProjectCredentials(projectId)
                     val defCreds = credentialStore.getDefaultCredentials()
-                    LoadedProjectDetail(project, cards, projCreds, defCreds)
+                    val hasOAuth = credentialStore.getProjectOAuthAccountId(projectId) != null ||
+                        credentialStore.getOAuthAccounts().isNotEmpty()
+                    LoadedProjectDetail(project, cards, projCreds, defCreds, hasOAuth)
                 }
             }
             result.onSuccess { data ->
+                val pendingNewRepos = registry.getPendingNewRepoIds()
                 _uiState.update {
                     it.copy(
                         project = data.project,
                         repos = data.repos,
+                        newlyAddedRepoIds = pendingNewRepos,
                         projectCredentials = data.projectCreds,
                         defaultCredentials = data.defaultCreds,
+                        hasConnectedOAuthAccounts = data.hasConnectedOAuthAccounts,
                         isLoading = false
                     )
                 }
@@ -105,7 +115,7 @@ class ProjectDetailViewModel(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.localizedMessage ?: "Не удалось загрузить проект"
+                        errorMessage = err.localizedMessage ?: AppLocale.current.projectErrLoadFailed
                     )
                 }
             }
@@ -124,7 +134,7 @@ class ProjectDetailViewModel(
     ) {
         val cleanUrl = url.trim()
         if (cleanUrl.isEmpty()) {
-            _uiState.update { it.copy(cloneError = "Укажите ссылку на Git-репозиторий") }
+            _uiState.update { it.copy(cloneError = AppLocale.current.projectErrEnterRepoUrl) }
             return
         }
 
@@ -136,11 +146,11 @@ class ProjectDetailViewModel(
                 it.copy(
                     isCloning = true,
                     cloneError = null,
-                    cloneProgress = CloneProgress("Подключение к репозиторию...", 0, 0)
+                    cloneProgress = CloneProgress(AppLocale.current.projectCloneConnecting, 0, 0)
                 )
             }
 
-            val creds = resolveCloneCredentials(useAuth, username, token)
+            val creds = resolveCloneCredentials(cleanUrl, useAuth, username, token)
 
             val outcome = withContext(ioDispatcher) {
                 runCatching {
@@ -167,7 +177,7 @@ class ProjectDetailViewModel(
                         isCloning = false,
                         cloneProgress = null,
                         cloneError = null,
-                        infoMessage = "Репозиторий «$derivedName» добавлен в проект"
+                        infoMessage = AppLocale.current.projectInfoRepoAdded(derivedName)
                     )
                 }
                 refresh()
@@ -179,7 +189,7 @@ class ProjectDetailViewModel(
                         isCloning = false,
                         cloneProgress = null,
                         cloneError = if (cancelled) {
-                            "Клонирование отменено"
+                            AppLocale.current.projectCloneCancelled
                         } else {
                             formatGitTransportError(err)
                         }
@@ -206,7 +216,7 @@ class ProjectDetailViewModel(
     ) {
         val cleanUrl = url.trim()
         if (cleanUrl.isEmpty()) {
-            _uiState.update { it.copy(groupDiscoveryError = "Укажите ссылку на группу GitLab или профиль/организацию GitHub") }
+            _uiState.update { it.copy(groupDiscoveryError = AppLocale.current.projectErrEnterGroupUrl) }
             return
         }
 
@@ -221,7 +231,7 @@ class ProjectDetailViewModel(
                 )
             }
 
-            val creds = resolveCloneCredentials(useAuth, username, token)
+            val creds = resolveCloneCredentials(cleanUrl, useAuth, username, token)
             val outcome = withContext(ioDispatcher) {
                 runCatching {
                     groupDiscoveryService.discoverRepositories(cleanUrl, creds)
@@ -251,7 +261,7 @@ class ProjectDetailViewModel(
                         isDiscoveringGroup = false,
                         discoveredRepos = items,
                         groupDiscoveryError = if (items.isEmpty()) {
-                            "По этой ссылке не найдено доступных репозиториев"
+                            AppLocale.current.projectErrGroupNoRepos
                         } else null
                     )
                 }
@@ -295,14 +305,13 @@ class ProjectDetailViewModel(
     ) {
         val selectedItems = _uiState.value.discoveredRepos.filter { it.selected }
         if (selectedItems.isEmpty()) {
-            _uiState.update { it.copy(groupCloneError = "Отметьте хотя бы один репозиторий") }
+            _uiState.update { it.copy(groupCloneError = AppLocale.current.projectErrSelectAtLeastOneRepo) }
             return
         }
 
         groupCancelFlag = AtomicBoolean(false)
         groupJob = viewModelScope.launch {
             val total = selectedItems.size
-            val creds = resolveCloneCredentials(useAuth, username, token)
             val explicitTokenCreds = if (useAuth && token.isNotBlank()) {
                 GitCredentials(username.trim(), token.trim())
             } else null
@@ -330,10 +339,11 @@ class ProjectDetailViewModel(
                     it.copy(
                         groupCloneCurrentIndex = idx + 1,
                         groupCloneCurrentRepoName = repo.name,
-                        groupCloneProgress = CloneProgress("Подключение к ${repo.name}...", 0, 0)
+                        groupCloneProgress = CloneProgress(AppLocale.current.projectGroupConnecting(repo.name), 0, 0)
                     )
                 }
 
+                val creds = resolveCloneCredentials(repo.cloneUrl, useAuth, username, token)
                 val outcome = withContext(ioDispatcher) {
                     runCatching {
                         cloneAndRegisterSingleRepo(
@@ -364,6 +374,7 @@ class ProjectDetailViewModel(
             val wasCancelled = groupCancelFlag.get()
             refresh()
 
+            val s = AppLocale.current
             _uiState.update { state ->
                 val updatedItems = state.discoveredRepos.map { item ->
                     if (item.repo.id in succeededIds) {
@@ -373,11 +384,11 @@ class ProjectDetailViewModel(
                     }
                 }
                 val errMsg = when {
-                    wasCancelled -> "Групповое клонирование отменено (загружено: $succeededCount из $total)"
+                    wasCancelled -> s.projectGroupCancelled(succeededCount, total)
                     failures.isNotEmpty() -> buildString {
-                        append("Загружено $succeededCount из $total. Ошибки:\n")
+                        append(s.projectGroupPartialErrorsHeader(succeededCount, total))
                         append(failures.take(3).joinToString("\n"))
-                        if (failures.size > 3) append("\n...и ещё ${failures.size - 3}")
+                        if (failures.size > 3) append(s.projectGroupMoreErrors(failures.size - 3))
                     }
                     else -> null
                 }
@@ -387,7 +398,7 @@ class ProjectDetailViewModel(
                     discoveredRepos = updatedItems,
                     groupCloneError = errMsg,
                     infoMessage = if (!wasCancelled && failures.isEmpty()) {
-                        "Добавлено репозиториев: $succeededCount"
+                        s.projectGroupAddedCount(succeededCount)
                     } else null
                 )
             }
@@ -424,14 +435,16 @@ class ProjectDetailViewModel(
         }
     }
 
-    private fun resolveCloneCredentials(
+    private suspend fun resolveCloneCredentials(
+        targetUrl: String?,
         useAuth: Boolean,
         username: String,
         token: String
     ): GitCredentials? {
         return when {
             useAuth && token.isNotBlank() -> GitCredentials(username.trim(), token.trim())
-            useAuth -> credentialStore.resolveForRepo(projectId, null)
+            useAuth -> oauthManager?.resolveFreshCredentials(projectId, null, targetUrl)
+                ?: credentialStore.resolveForRepo(projectId, null, targetUrl)
             else -> null
         }
     }
@@ -482,7 +495,7 @@ class ProjectDetailViewModel(
     ) {
         val cleanName = repoName.trim()
         if (cleanName.isEmpty()) {
-            _uiState.update { it.copy(createRepoError = "Введите название репозитория") }
+            _uiState.update { it.copy(createRepoError = AppLocale.current.projectErrEnterRepoName) }
             return
         }
 
@@ -520,7 +533,7 @@ class ProjectDetailViewModel(
                     it.copy(
                         isCreatingRepo = false,
                         createRepoError = null,
-                        infoMessage = "Репозиторий «$cleanName» создан"
+                        infoMessage = AppLocale.current.projectInfoRepoCreated(cleanName)
                     )
                 }
                 refresh()
@@ -529,7 +542,7 @@ class ProjectDetailViewModel(
                 _uiState.update {
                     it.copy(
                         isCreatingRepo = false,
-                        createRepoError = err.localizedMessage ?: "Не удалось создать репозиторий"
+                        createRepoError = err.localizedMessage ?: AppLocale.current.projectErrCreateRepo
                     )
                 }
             }
@@ -546,7 +559,7 @@ class ProjectDetailViewModel(
                 registry.deleteRepository(projectId, repoId, deleteFilesOnDisk = true)
                 credentialStore.removeRepoCredentials(repoId)
             }
-            _uiState.update { it.copy(infoMessage = "Репозиторий удалён") }
+            _uiState.update { it.copy(infoMessage = AppLocale.current.projectInfoRepoDeleted) }
             refresh()
         }
     }
@@ -562,13 +575,14 @@ class ProjectDetailViewModel(
                 )
             }
             val updated = credentialStore.getProjectCredentials(projectId)
+            val s = AppLocale.current
             _uiState.update {
                 it.copy(
                     projectCredentials = updated,
                     infoMessage = if (token.isBlank()) {
-                        "Токен проекта очищен"
+                        s.projectInfoProjectTokenCleared
                     } else {
-                        "Токен проекта сохранён"
+                        s.projectInfoProjectTokenSaved
                     }
                 )
             }
@@ -579,11 +593,19 @@ class ProjectDetailViewModel(
         _uiState.update { it.copy(errorMessage = null, infoMessage = null) }
     }
 
+    fun consumeNewlyAddedRepo(repoId: String) {
+        registry.markRepoSeen(repoId)
+        _uiState.update {
+            it.copy(newlyAddedRepoIds = it.newlyAddedRepoIds - repoId)
+        }
+    }
+
     private data class LoadedProjectDetail(
         val project: WorkspaceProject,
         val repos: List<RepoCardInfo>,
         val projectCreds: GitCredentials?,
-        val defaultCreds: GitCredentials?
+        val defaultCreds: GitCredentials?,
+        val hasConnectedOAuthAccounts: Boolean
     )
 
     companion object {
@@ -598,7 +620,8 @@ class ProjectDetailViewModel(
             gitEngine: GitEngine,
             registry: ProjectRegistry,
             credentialStore: CredentialStore,
-            groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService()
+            groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService(),
+            oauthManager: GitOAuthManager? = null
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -607,7 +630,8 @@ class ProjectDetailViewModel(
                     gitEngine = gitEngine,
                     registry = registry,
                     credentialStore = credentialStore,
-                    groupDiscoveryService = groupDiscoveryService
+                    groupDiscoveryService = groupDiscoveryService,
+                    oauthManager = oauthManager
                 ) as T
             }
         }

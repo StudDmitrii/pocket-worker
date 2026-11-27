@@ -28,6 +28,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.Check
@@ -40,7 +43,6 @@ import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -62,8 +64,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -95,22 +95,27 @@ import com.pocketworker.app.core.ai.LocalModelDownloadState
 import com.pocketworker.app.core.ai.LocalModelStatus
 import com.pocketworker.app.core.ai.ProxyParseResult
 import com.pocketworker.app.core.ai.parseAiProxyUrl
+import com.pocketworker.app.core.git.GitOAuthAccount
+import com.pocketworker.app.core.git.GitOAuthProvider
+import com.pocketworker.app.core.i18n.AppLanguage
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.core.storage.AiAgentSettings
 import com.pocketworker.app.core.storage.AiProvider
 import com.pocketworker.app.core.storage.AppThemeMode
 import com.pocketworker.app.ui.common.CredentialsEditorDialog
 import com.pocketworker.app.ui.common.FormFieldShape
 import com.pocketworker.app.ui.common.PocketFormDialog
+import com.pocketworker.app.ui.common.TopNotificationHost
 import com.pocketworker.app.ui.common.WorkspaceBackdrop
 import com.pocketworker.app.ui.common.appSwitchColors
 import com.pocketworker.app.ui.common.backdropCardBorderColor
 import com.pocketworker.app.ui.common.backdropCardContainerColor
 import com.pocketworker.app.ui.common.formTextFieldColors
 import com.pocketworker.app.ui.common.formatFileSize
+import com.pocketworker.app.ui.common.rememberTopNotificationState
 import com.pocketworker.app.ui.theme.GitSemanticColors
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 import com.pocketworker.app.ui.workspace.AuthorConfigDialog
-import com.pocketworker.app.ui.workspace.ProjectCredentialsDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,8 +126,9 @@ fun SettingsScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val notificationState = rememberTopNotificationState()
     val isDark = LocalIsDarkTheme.current
+    val s = LocalAppStrings.current
 
     var activeTab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
 
@@ -132,11 +138,22 @@ fun SettingsScreen(
     var showRepoCredentialsDialog by remember { mutableStateOf(false) }
     var showRepoAuthorDialog by remember { mutableStateOf(false) }
     var showAuthorDialog by remember { mutableStateOf(false) }
+    var showGitHubOAuthDialog by remember { mutableStateOf(false) }
+    var showGitLabOAuthDialog by remember { mutableStateOf(false) }
+    var pendingOAuthBindScope by remember { mutableStateOf(OAuthAutoBindScope.NONE) }
+
+    LaunchedEffect(state.lastOAuthCompletedEventId) {
+        if (state.lastOAuthCompletedEventId > 0L) {
+            showGitHubOAuthDialog = false
+            showGitLabOAuthDialog = false
+            pendingOAuthBindScope = OAuthAutoBindScope.NONE
+        }
+    }
 
     LaunchedEffect(state.infoMessage) {
         val msg = state.infoMessage
         if (msg != null) {
-            snackbarHostState.showSnackbar(msg)
+            notificationState.show(msg)
             viewModel.clearMessage()
         }
     }
@@ -159,22 +176,22 @@ fun SettingsScreen(
                             IconButton(onClick = onBack) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    contentDescription = "Назад"
+                                    contentDescription = s.commonBack
                                 )
                             }
                         },
                         title = {
                             Column {
                                 Text(
-                                    text = "Настройки",
+                                    text = s.settingsTitle,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = when {
-                                        activeTab == SettingsTab.AGENT -> "ИИ-модель, ключ и поведение агента"
-                                        state.repoEntry != null -> "Репозиторий «${state.repoEntry!!.name}» и приложение"
-                                        state.projectName != null -> "Проект «${state.projectName}» и приложение"
-                                        else -> "Тема, фон и доступ Git"
+                                        activeTab == SettingsTab.AGENT -> s.settingsSubtitleAgent
+                                        state.repoEntry != null -> s.settingsSubtitleRepo(state.repoEntry!!.name)
+                                        state.projectName != null -> s.settingsSubtitleProject(state.projectName!!)
+                                        else -> s.settingsSubtitleGeneral
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -199,7 +216,7 @@ fun SettingsScreen(
                                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 text = {
                                     Text(
-                                        text = tab.title,
+                                        text = tab.localizedTitle(s),
                                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                                     )
                                 }
@@ -207,63 +224,86 @@ fun SettingsScreen(
                         }
                     }
                 }
-            },
-            snackbarHost = { SnackbarHost(snackbarHostState) }
+            }
         ) { padding ->
-            when (activeTab) {
-                SettingsTab.GENERAL -> {
-                    GeneralSettingsTabContent(
-                        state = state,
-                        isDark = isDark,
-                        onThemeModeSelected = { viewModel.setThemeMode(it) },
-                        onAnimatedBackgroundToggle = { viewModel.setAnimatedBackgroundEnabled(it) },
-                        onOpenDefaultCredentials = { showDefaultCredentialsDialog = true },
-                        onOpenGlobalAuthor = { showAuthorDialog = true },
-                        onOpenProjectCredentials = { showProjectCredentialsDialog = true },
-                        onOpenProjectAuthor = { showProjectAuthorDialog = true },
-                        onOpenRepoCredentials = { showRepoCredentialsDialog = true },
-                        onOpenRepoAuthor = { showRepoAuthorDialog = true },
-                        onOpenGuidePdf = onOpenGuidePdf,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(padding)
-                            .consumeWindowInsets(padding)
-                    )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .consumeWindowInsets(padding)
+            ) {
+                when (activeTab) {
+                    SettingsTab.GENERAL -> {
+                        GeneralSettingsTabContent(
+                            state = state,
+                            isDark = isDark,
+                            onThemeModeSelected = { viewModel.setThemeMode(it) },
+                            onLanguageSelected = { viewModel.setLanguage(it) },
+                            onAnimatedBackgroundToggle = { viewModel.setAnimatedBackgroundEnabled(it) },
+                            onOpenDefaultCredentials = { showDefaultCredentialsDialog = true },
+                            onOpenGlobalAuthor = { showAuthorDialog = true },
+                            onOpenGitHubOAuth = {
+                                pendingOAuthBindScope = OAuthAutoBindScope.NONE
+                                viewModel.cancelOAuthFlow()
+                                showGitHubOAuthDialog = true
+                            },
+                            onOpenGitLabOAuth = {
+                                pendingOAuthBindScope = OAuthAutoBindScope.NONE
+                                viewModel.cancelOAuthFlow()
+                                showGitLabOAuthDialog = true
+                            },
+                            onSetDefaultOAuthAccount = { host, id ->
+                                viewModel.setDefaultOAuthAccountForHost(host, id)
+                            },
+                            onRemoveOAuthAccount = { id ->
+                                viewModel.removeOAuthAccount(id)
+                            },
+                            onOpenProjectCredentials = { showProjectCredentialsDialog = true },
+                            onOpenProjectAuthor = { showProjectAuthorDialog = true },
+                            onOpenRepoCredentials = { showRepoCredentialsDialog = true },
+                            onOpenRepoAuthor = { showRepoAuthorDialog = true },
+                            onOpenGuidePdf = onOpenGuidePdf,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    SettingsTab.AGENT -> {
+                        AgentSettingsTabContent(
+                            initialSettings = state.preferences.aiSettings,
+                            initialApiKeys = state.aiApiKeys,
+                            initialProxyUrl = state.aiProxyUrl,
+                            localModelStates = state.localModelStates,
+                            isDark = isDark,
+                            onDownloadLocalModel = { modelId, useProxy, proxyUrl ->
+                                viewModel.downloadLocalModel(modelId, useProxy, proxyUrl)
+                            },
+                            onCancelLocalModelDownload = { modelId ->
+                                viewModel.cancelLocalModelDownload(modelId)
+                            },
+                            onDeleteLocalModel = { modelId ->
+                                viewModel.deleteLocalModel(modelId)
+                            },
+                            onSave = { updatedSettings, updatedKeysByProvider, updatedProxyUrl ->
+                                viewModel.saveAiSettings(updatedSettings, updatedKeysByProvider, updatedProxyUrl)
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .imePadding()
+                        )
+                    }
                 }
-                SettingsTab.AGENT -> {
-                    AgentSettingsTabContent(
-                        initialSettings = state.preferences.aiSettings,
-                        initialApiKeys = state.aiApiKeys,
-                        initialProxyUrl = state.aiProxyUrl,
-                        localModelStates = state.localModelStates,
-                        isDark = isDark,
-                        onDownloadLocalModel = { modelId, useProxy, proxyUrl ->
-                            viewModel.downloadLocalModel(modelId, useProxy, proxyUrl)
-                        },
-                        onCancelLocalModelDownload = { modelId ->
-                            viewModel.cancelLocalModelDownload(modelId)
-                        },
-                        onDeleteLocalModel = { modelId ->
-                            viewModel.deleteLocalModel(modelId)
-                        },
-                        onSave = { updatedSettings, updatedKeysByProvider, updatedProxyUrl ->
-                            viewModel.saveAiSettings(updatedSettings, updatedKeysByProvider, updatedProxyUrl)
-                        },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(padding)
-                            .consumeWindowInsets(padding)
-                            .imePadding()
-                    )
-                }
+
+                TopNotificationHost(
+                    state = notificationState,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
             }
         }
     }
 
     if (showDefaultCredentialsDialog) {
         CredentialsEditorDialog(
-            title = "Токен Git по умолчанию",
-            description = "Хранится в зашифрованном Android Keystore и используется, если у проекта и репозитория не задан отдельный токен.",
+            title = s.settingsDefaultTokenDialogTitle,
+            description = s.settingsDefaultTokenDialogDesc,
             currentCredentials = state.defaultCredentials,
             onDismiss = { showDefaultCredentialsDialog = false },
             onSave = { user, token -> viewModel.saveDefaultCredentials(user, token) }
@@ -271,12 +311,26 @@ fun SettingsScreen(
     }
 
     if (showProjectCredentialsDialog && state.projectName != null) {
-        CredentialsEditorDialog(
-            title = "Токен проекта",
-            description = "Общий токен для всех репозиториев проекта «${state.projectName}». Используется, если у конкретного репозитория не задан свой токен.",
-            currentCredentials = state.projectCredentials,
-            onDismiss = { showProjectCredentialsDialog = false },
-            onSave = { user, token -> viewModel.saveProjectCredentials(user, token) }
+        ScopedGitAuthDialog(
+            title = s.settingsProjectTokenTitle,
+            description = s.settingsProjectTokenDialogDesc(state.projectName!!),
+            connectedAccounts = state.oauthAccounts,
+            selectedAccountId = state.projectOAuthAccount?.id,
+            currentManualCredentials = state.projectCredentials,
+            onSelectAccount = { accId -> viewModel.bindProjectOAuthAccount(accId) },
+            onSaveManual = { user, token -> viewModel.saveProjectCredentials(user, token) },
+            onClearOverride = { viewModel.bindProjectOAuthAccount(null) },
+            onAddGitHubAccount = {
+                pendingOAuthBindScope = OAuthAutoBindScope.PROJECT
+                viewModel.cancelOAuthFlow()
+                showGitHubOAuthDialog = true
+            },
+            onAddGitLabAccount = {
+                pendingOAuthBindScope = OAuthAutoBindScope.PROJECT
+                viewModel.cancelOAuthFlow()
+                showGitLabOAuthDialog = true
+            },
+            onDismiss = { showProjectCredentialsDialog = false }
         )
     }
 
@@ -294,11 +348,63 @@ fun SettingsScreen(
     }
 
     if (showRepoCredentialsDialog && state.repoEntry != null) {
-        ProjectCredentialsDialog(
-            currentCredentials = state.repoCredentials,
-            hasDefaultCredentials = state.projectCredentials != null || state.defaultCredentials != null,
-            onDismiss = { showRepoCredentialsDialog = false },
-            onSave = { user, token -> viewModel.saveRepoCredentials(user, token) }
+        ScopedGitAuthDialog(
+            title = s.settingsRepoTokenTitle,
+            description = if (state.projectCredentials != null || state.projectOAuthAccount != null ||
+                state.defaultCredentials != null || state.oauthAccounts.isNotEmpty()
+            ) {
+                s.gitRepoAuthFallbackHint
+            } else {
+                s.gitRepoAuthDirectHint
+            },
+            connectedAccounts = state.oauthAccounts,
+            selectedAccountId = state.repoOAuthAccount?.id,
+            currentManualCredentials = state.repoCredentials,
+            onSelectAccount = { accId -> viewModel.bindRepoOAuthAccount(accId) },
+            onSaveManual = { user, token -> viewModel.saveRepoCredentials(user, token) },
+            onClearOverride = { viewModel.bindRepoOAuthAccount(null) },
+            onAddGitHubAccount = {
+                pendingOAuthBindScope = OAuthAutoBindScope.REPO
+                viewModel.cancelOAuthFlow()
+                showGitHubOAuthDialog = true
+            },
+            onAddGitLabAccount = {
+                pendingOAuthBindScope = OAuthAutoBindScope.REPO
+                viewModel.cancelOAuthFlow()
+                showGitLabOAuthDialog = true
+            },
+            onDismiss = { showRepoCredentialsDialog = false }
+        )
+    }
+
+    if (showGitHubOAuthDialog) {
+        GitHubOAuthDialog(
+            initialClientId = state.githubClientId,
+            flowState = state.oauthFlowState,
+            onStart = { clientId -> viewModel.startGitHubOAuth(clientId, pendingOAuthBindScope) },
+            onDismiss = {
+                showGitHubOAuthDialog = false
+                pendingOAuthBindScope = OAuthAutoBindScope.NONE
+                viewModel.cancelOAuthFlow()
+            },
+            onNotify = { msg -> viewModel.notifyInfo(msg) }
+        )
+    }
+
+    if (showGitLabOAuthDialog) {
+        GitLabOAuthDialog(
+            initialCloudClientId = state.gitlabCloudClientId,
+            flowState = state.oauthFlowState,
+            resolveSavedClientIdForUrl = { url -> viewModel.getSavedGitLabClientIdForUrl(url) },
+            onPrepareAuthUrl = { baseUrl, clientId ->
+                viewModel.prepareGitLabOAuth(baseUrl, clientId, pendingOAuthBindScope)
+            },
+            onDismiss = {
+                showGitLabOAuthDialog = false
+                pendingOAuthBindScope = OAuthAutoBindScope.NONE
+                viewModel.cancelOAuthFlow()
+            },
+            onNotify = { msg -> viewModel.notifyInfo(msg) }
         )
     }
 
@@ -320,10 +426,12 @@ fun SettingsScreen(
 
     if (showAuthorDialog) {
         GlobalAuthorDialog(
-            currentName = state.globalAuthorName,
-            currentEmail = state.globalAuthorEmail,
+            currentName = if (state.hasCustomGlobalAuthor) state.globalAuthorName else "",
+            currentEmail = if (state.hasCustomGlobalAuthor) state.globalAuthorEmail else "",
+            hasOverride = state.hasCustomGlobalAuthor,
             onDismiss = { showAuthorDialog = false },
-            onSave = { name, email -> viewModel.saveGlobalAuthor(name, email) }
+            onSave = { name, email -> viewModel.saveGlobalAuthor(name, email) },
+            onReset = { viewModel.clearGlobalAuthor() }
         )
     }
 }
@@ -333,9 +441,14 @@ private fun GeneralSettingsTabContent(
     state: SettingsUiState,
     isDark: Boolean,
     onThemeModeSelected: (AppThemeMode) -> Unit,
+    onLanguageSelected: (AppLanguage) -> Unit,
     onAnimatedBackgroundToggle: (Boolean) -> Unit,
     onOpenDefaultCredentials: () -> Unit,
     onOpenGlobalAuthor: () -> Unit,
+    onOpenGitHubOAuth: () -> Unit,
+    onOpenGitLabOAuth: () -> Unit,
+    onSetDefaultOAuthAccount: (host: String, accountId: String) -> Unit,
+    onRemoveOAuthAccount: (accountId: String) -> Unit,
     onOpenProjectCredentials: () -> Unit,
     onOpenProjectAuthor: () -> Unit,
     onOpenRepoCredentials: () -> Unit,
@@ -343,6 +456,7 @@ private fun GeneralSettingsTabContent(
     onOpenGuidePdf: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp),
@@ -350,11 +464,11 @@ private fun GeneralSettingsTabContent(
     ) {
         item(key = "appearance_card") {
             SettingsSectionCard(
-                title = "Внешний вид",
+                title = s.settingsAppearanceTitle,
                 isDark = isDark
             ) {
                 Text(
-                    text = "Тема оформления",
+                    text = s.settingsThemeTitle,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -364,23 +478,56 @@ private fun GeneralSettingsTabContent(
                 ) {
                     ThemeOptionTile(
                         icon = Icons.Rounded.BrightnessAuto,
-                        label = "Авто",
+                        label = s.settingsThemeAuto,
                         selected = state.preferences.themeMode == AppThemeMode.SYSTEM,
                         onClick = { onThemeModeSelected(AppThemeMode.SYSTEM) },
                         modifier = Modifier.weight(1f)
                     )
                     ThemeOptionTile(
                         icon = Icons.Rounded.LightMode,
-                        label = "Светлая",
+                        label = s.settingsThemeLight,
                         selected = state.preferences.themeMode == AppThemeMode.LIGHT,
                         onClick = { onThemeModeSelected(AppThemeMode.LIGHT) },
                         modifier = Modifier.weight(1f)
                     )
                     ThemeOptionTile(
                         icon = Icons.Rounded.DarkMode,
-                        label = "Тёмная",
+                        label = s.settingsThemeDark,
                         selected = state.preferences.themeMode == AppThemeMode.DARK,
                         onClick = { onThemeModeSelected(AppThemeMode.DARK) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                )
+
+                Text(
+                    text = s.settingsLanguageTitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CompactOptionPill(
+                        label = s.settingsLanguageSystem,
+                        selected = state.preferences.language == AppLanguage.SYSTEM,
+                        onClick = { onLanguageSelected(AppLanguage.SYSTEM) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    CompactOptionPill(
+                        label = s.settingsLanguageRussian,
+                        selected = state.preferences.language == AppLanguage.RU,
+                        onClick = { onLanguageSelected(AppLanguage.RU) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    CompactOptionPill(
+                        label = s.settingsLanguageEnglish,
+                        selected = state.preferences.language == AppLanguage.EN,
+                        onClick = { onLanguageSelected(AppLanguage.EN) },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -402,12 +549,12 @@ private fun GeneralSettingsTabContent(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Анимация заднего фона",
+                            text = s.settingsAnimatedBgTitle,
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Плавная анимация поверх градиента. Отключите для экономии заряда.",
+                            text = s.settingsAnimatedBgSubtitle,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -425,36 +572,50 @@ private fun GeneralSettingsTabContent(
         item(key = "git_card") {
             val sectionDividerColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
             SettingsSectionCard(
-                title = "Git и авторизация",
+                title = s.settingsGitAndAuthTitle,
                 isDark = isDark
             ) {
-                // 1. По умолчанию
+                // 1. Default
                 Text(
-                    text = "По умолчанию",
+                    text = s.settingsScopeDefault,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
 
+                // Layer 1: Connected OAuth accounts (GitHub & GitLab / Self-hosted)
+                OAuthAccountsSection(
+                    accounts = state.oauthAccounts,
+                    defaultIdsByHost = state.defaultOAuthAccountIdsByHost,
+                    onSignInGitHub = onOpenGitHubOAuth,
+                    onSignInGitLab = onOpenGitLabOAuth,
+                    onSetDefaultForHost = onSetDefaultOAuthAccount,
+                    onRemoveAccount = onRemoveOAuthAccount
+                )
+
                 SettingsActionRow(
                     icon = Icons.Rounded.Key,
-                    title = "Токен Git по умолчанию (PAT)",
+                    title = s.settingsDefaultTokenTitle,
                     subtitle = if (state.defaultCredentials != null) {
-                        "Сохранён в Keystore (${state.defaultCredentials.username.ifBlank { "token" }})"
+                        s.settingsTokenSavedInKeystore(state.defaultCredentials.username.ifBlank { "token" })
                     } else {
-                        "Не задан (только публичное чтение)"
+                        s.commonNotSet
                     },
                     onClick = onOpenDefaultCredentials
                 )
 
                 SettingsActionRow(
                     icon = Icons.Rounded.Person,
-                    title = "Автор коммитов по умолчанию",
-                    subtitle = "${state.globalAuthorName} <${state.globalAuthorEmail}>",
+                    title = s.settingsDefaultAuthorTitle,
+                    subtitle = if (state.hasCustomGlobalAuthor) {
+                        "${state.globalAuthorName} <${state.globalAuthorEmail}>"
+                    } else {
+                        s.commonNotSet
+                    },
                     onClick = onOpenGlobalAuthor
                 )
 
-                // 2. По проекту
+                // 2. Project
                 if (state.projectId != null && state.projectName != null) {
                     HorizontalDivider(
                         thickness = 1.5.dp,
@@ -463,7 +624,7 @@ private fun GeneralSettingsTabContent(
                     )
 
                     Text(
-                        text = "Проект «${state.projectName}»",
+                        text = s.settingsScopeProject(state.projectName),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary,
@@ -473,11 +634,12 @@ private fun GeneralSettingsTabContent(
 
                     SettingsActionRow(
                         icon = Icons.Rounded.Key,
-                        title = "Токен проекта",
-                        subtitle = if (state.projectCredentials != null) {
-                            "Задан (${state.projectCredentials.username.ifBlank { "token" }})"
-                        } else {
-                            "Не задан (используется токен по умолчанию)"
+                        title = s.settingsProjectTokenTitle,
+                        subtitle = when {
+                            state.projectOAuthAccount != null -> state.projectOAuthAccount.shortLabel()
+                            state.projectCredentials != null ->
+                                s.settingsTokenSet(state.projectCredentials.username.ifBlank { "token" })
+                            else -> s.commonNotSet
                         },
                         onClick = onOpenProjectCredentials
                     )
@@ -486,17 +648,17 @@ private fun GeneralSettingsTabContent(
                         !state.projectAuthorEmail.isNullOrBlank()
                     SettingsActionRow(
                         icon = Icons.Rounded.Person,
-                        title = "Автор коммитов проекта",
+                        title = s.settingsProjectAuthorTitle,
                         subtitle = if (hasProjectAuthor) {
                             "${state.projectAuthorName ?: state.globalAuthorName} <${state.projectAuthorEmail ?: state.globalAuthorEmail}>"
                         } else {
-                            "Не задан (используется автор по умолчанию)"
+                            s.commonNotSet
                         },
                         onClick = onOpenProjectAuthor
                     )
                 }
 
-                // 3. По репозиторию
+                // 3. Repository
                 state.repoEntry?.let { repo ->
                     HorizontalDivider(
                         thickness = 1.5.dp,
@@ -505,7 +667,7 @@ private fun GeneralSettingsTabContent(
                     )
 
                     Text(
-                        text = "Репозиторий «${repo.name}»",
+                        text = s.settingsScopeRepo(repo.name),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary,
@@ -515,13 +677,12 @@ private fun GeneralSettingsTabContent(
 
                     SettingsActionRow(
                         icon = Icons.Rounded.Key,
-                        title = "Токен репозитория",
+                        title = s.settingsRepoTokenTitle,
                         subtitle = when {
+                            state.repoOAuthAccount != null -> state.repoOAuthAccount.shortLabel()
                             state.repoCredentials != null ->
-                                "Задан (${state.repoCredentials.username.ifBlank { "token" }})"
-                            state.projectCredentials != null || state.defaultCredentials != null ->
-                                "Не задан (используется токен проекта или по умолчанию)"
-                            else -> "Не задан"
+                                s.settingsTokenSet(state.repoCredentials.username.ifBlank { "token" })
+                            else -> s.commonNotSet
                         },
                         onClick = onOpenRepoCredentials
                     )
@@ -529,11 +690,11 @@ private fun GeneralSettingsTabContent(
                     if (state.isGitRepo) {
                         SettingsActionRow(
                             icon = Icons.Rounded.Person,
-                            title = "Автор коммитов репозитория",
+                            title = s.settingsRepoAuthorTitle,
                             subtitle = if (state.repoHasCustomAuthor) {
                                 "${state.repoAuthorName} <${state.repoAuthorEmail}>"
                             } else {
-                                "Не задан (${state.repoAuthorName} <${state.repoAuthorEmail}>)"
+                                s.commonNotSet
                             },
                             onClick = onOpenRepoAuthor
                         )
@@ -544,7 +705,7 @@ private fun GeneralSettingsTabContent(
 
         item(key = "about_card") {
             SettingsSectionCard(
-                title = "О приложении",
+                title = s.settingsAboutTitle,
                 isDark = isDark
             ) {
                 Row(
@@ -560,7 +721,7 @@ private fun GeneralSettingsTabContent(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Версия 0.1.0 • Локальный Git и AI-ассистент",
+                            text = s.settingsVersionSubtitle,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -572,9 +733,9 @@ private fun GeneralSettingsTabContent(
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
                     )
                     SettingsActionRow(
-                        icon = Icons.Rounded.MenuBook,
-                        title = "Инструкция по работе",
-                        subtitle = "Открыть слайд-гид по проектам, Git и AI-агенту",
+                        icon = Icons.AutoMirrored.Rounded.MenuBook,
+                        title = s.settingsGuideTitle,
+                        subtitle = s.settingsGuideSubtitle,
                         onClick = onOpenGuidePdf
                     )
                 }
@@ -620,6 +781,7 @@ private fun AgentSettingsTabContent(
     var proxyVisible by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
 
+    val s = LocalAppStrings.current
     val selectedModelOption = provider.findModelOption(modelsDraft[provider])
     val currentApiKey = apiKeysDraft[provider].orEmpty()
     val hasAnyLocalDownloaded = remember(localModelStates) {
@@ -627,7 +789,7 @@ private fun AgentSettingsTabContent(
     }
     val selectedLocalState = localModelStates[selectedModelOption.id]
         ?: LocalModelDownloadState(modelId = selectedModelOption.id)
-    val proxyValidationError = remember(proxyEnabled, proxyUrlDraft) {
+    val proxyValidationError = remember(proxyEnabled, proxyUrlDraft, s) {
         if (!proxyEnabled || proxyUrlDraft.isBlank()) {
             null
         } else {
@@ -642,11 +804,11 @@ private fun AgentSettingsTabContent(
     ) {
         item(key = "agent_model_card") {
             SettingsSectionCard(
-                title = "Модель и подключение",
+                title = s.settingsModelAndConnectionTitle,
                 isDark = isDark
             ) {
                 Text(
-                    text = "Провайдер",
+                    text = s.settingsProviderLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -719,7 +881,11 @@ private fun AgentSettingsTabContent(
                                                 } else {
                                                     Icons.Rounded.Key
                                                 },
-                                                contentDescription = if (item == AiProvider.LOCAL) "Модель скачана" else "Ключ задан",
+                                                contentDescription = if (item == AiProvider.LOCAL) {
+                                                    s.settingsProviderLocalDownloadedDesc
+                                                } else {
+                                                    s.settingsProviderKeySetDesc
+                                                },
                                                 tint = if (item == AiProvider.LOCAL) {
                                                     if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
                                                 } else if (selected) {
@@ -747,7 +913,7 @@ private fun AgentSettingsTabContent(
                         onValueChange = {},
                         readOnly = true,
                         singleLine = true,
-                        label = { Text("Модель") },
+                        label = { Text(s.settingsModelLabel) },
                         supportingText = {
                             Text(
                                 text = "${selectedModelOption.id} • ${selectedModelOption.subtitle}",
@@ -788,7 +954,7 @@ private fun AgentSettingsTabContent(
                                             if (isLocalDownloaded) {
                                                 Icon(
                                                     imageVector = Icons.Rounded.DownloadDone,
-                                                    contentDescription = "Скачана",
+                                                    contentDescription = s.settingsDownloadedDesc,
                                                     tint = if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight,
                                                     modifier = Modifier.size(15.dp)
                                                 )
@@ -807,7 +973,7 @@ private fun AgentSettingsTabContent(
                                     {
                                         Icon(
                                             imageVector = Icons.Rounded.Check,
-                                            contentDescription = "Выбрана",
+                                            contentDescription = s.settingsSelectedDesc,
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(18.dp)
                                         )
@@ -849,10 +1015,10 @@ private fun AgentSettingsTabContent(
                         placeholder = { Text(provider.apiKeyPlaceholder) },
                         supportingText = when (provider) {
                             AiProvider.GEMINI -> {
-                                { Text("Прямое подключение к Google AI Studio (aistudio.google.com)") }
+                                { Text(s.settingsGeminiDirectHint) }
                             }
                             AiProvider.OPENROUTER -> {
-                                { Text("Единый API-ключ OpenRouter для моделей Gemini, ERNIE и др. с поддержкой инструментов") }
+                                { Text(s.settingsOpenRouterHint) }
                             }
                             else -> null
                         },
@@ -872,7 +1038,7 @@ private fun AgentSettingsTabContent(
                                     } else {
                                         Icons.Rounded.Visibility
                                     },
-                                    contentDescription = if (keyVisible) "Скрыть ключ" else "Показать ключ"
+                                    contentDescription = if (keyVisible) s.settingsHideKeyDesc else s.settingsShowKeyDesc
                                 )
                             }
                         },
@@ -898,15 +1064,15 @@ private fun AgentSettingsTabContent(
                     Spacer(modifier = Modifier.width(4.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Прокси",
+                            text = s.settingsProxyTitle,
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
                             text = if (provider == AiProvider.LOCAL) {
-                                "Использовать прокси при скачивании локальной модели"
+                                s.settingsProxyLocalSubtitle
                             } else {
-                                "Отправлять все запросы к ИИ через прокси-сервер"
+                                s.settingsProxyCloudSubtitle
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -922,13 +1088,12 @@ private fun AgentSettingsTabContent(
                     OutlinedTextField(
                         value = proxyUrlDraft,
                         onValueChange = { proxyUrlDraft = it },
-                        label = { Text("Адрес прокси") },
+                        label = { Text(s.settingsProxyAddressLabel) },
                         placeholder = { Text("http://user:password@ip:port") },
                         isError = proxyValidationError != null,
                         supportingText = {
                             Text(
-                                text = proxyValidationError
-                                    ?: "Формат: http://user:password@ip:port (или socks5://...)"
+                                text = proxyValidationError ?: s.settingsProxyFormatHint
                             )
                         },
                         singleLine = true,
@@ -947,7 +1112,7 @@ private fun AgentSettingsTabContent(
                                     } else {
                                         Icons.Rounded.Visibility
                                     },
-                                    contentDescription = if (proxyVisible) "Скрыть адрес прокси" else "Показать адрес прокси"
+                                    contentDescription = if (proxyVisible) s.settingsHideProxyDesc else s.settingsShowProxyDesc
                                 )
                             }
                         },
@@ -959,14 +1124,14 @@ private fun AgentSettingsTabContent(
 
         item(key = "agent_behavior_card") {
             SettingsSectionCard(
-                title = "Поведение агента",
+                title = s.settingsAgentBehaviorTitle,
                 isDark = isDark
             ) {
                 OutlinedTextField(
                     value = systemPrompt,
                     onValueChange = { systemPrompt = it },
-                    label = { Text("Системная инструкция (System Prompt)") },
-                    placeholder = { Text("Отвечай кратко, поясняй изменения перед правкой файлов...") },
+                    label = { Text(s.settingsSystemPromptLabel) },
+                    placeholder = { Text(s.settingsSystemPromptPlaceholder) },
                     minLines = 3,
                     maxLines = 6,
                     shape = FormFieldShape,
@@ -987,12 +1152,12 @@ private fun AgentSettingsTabContent(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Передавать контекст папок и файла",
+                            text = s.settingsShareContextTitle,
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Агент видит открытый проект, репозиторий и файл",
+                            text = s.settingsShareContextSubtitle,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1009,30 +1174,38 @@ private fun AgentSettingsTabContent(
                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
                 )
 
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { confirmFileEdits = !confirmFileEdits }
                         .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Авторазрешение действий Tier 1",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium
+                    Text(
+                        text = s.settingsPermissionsTitle,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CompactOptionPill(
+                            label = s.settingsPermissionsAsk,
+                            selected = confirmFileEdits,
+                            onClick = { confirmFileEdits = true },
+                            modifier = Modifier.weight(1f)
                         )
-                        Text(
-                            text = "Автоматически выполнять создание проектов/репозиториев, правки файлов и локальный Git (commit/branch/pull) без запроса. Опасные действия Tier 2 (push, reset --hard, удаление) всегда требуют подтверждения.",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        CompactOptionPill(
+                            label = s.settingsPermissionsAuto,
+                            selected = !confirmFileEdits,
+                            onClick = { confirmFileEdits = false },
+                            modifier = Modifier.weight(1f)
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(
-                        checked = !confirmFileEdits,
-                        onCheckedChange = { autoApprove -> confirmFileEdits = !autoApprove },
-                        colors = appSwitchColors()
+                    Text(
+                        text = s.settingsPermissionsSubtitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1061,7 +1234,7 @@ private fun AgentSettingsTabContent(
                     .fillMaxWidth()
                     .heightIn(min = 50.dp)
             ) {
-                Text("Сохранить настройки агента")
+                Text(s.settingsSaveAgentButton)
             }
         }
     }
@@ -1078,6 +1251,7 @@ private fun LocalModelDownloadSection(
     onCancel: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val context = LocalContext.current
     val memorySummary = remember(context) {
         runCatching {
@@ -1126,7 +1300,7 @@ private fun LocalModelDownloadSection(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Скачивание $modelLabel...",
+                            text = s.settingsLocalDownloading(modelLabel),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
@@ -1171,7 +1345,7 @@ private fun LocalModelDownloadSection(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Отменить загрузку")
+                        Text(s.settingsLocalCancelDownload)
                     }
                 }
 
@@ -1189,13 +1363,13 @@ private fun LocalModelDownloadSection(
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Модель скачана и готова",
+                                text = s.settingsLocalReadyTitle,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Размер на устройстве: ${formatFileSize(downloadState.totalBytes)} • работает офлайн",
+                                text = s.settingsLocalReadySubtitle(formatFileSize(downloadState.totalBytes)),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1215,20 +1389,23 @@ private fun LocalModelDownloadSection(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Удалить файл модели")
+                        Text(s.settingsLocalDeleteButton)
                     }
                 }
 
                 LocalModelStatus.NOT_DOWNLOADED, LocalModelStatus.ERROR -> {
                     Text(
-                        text = "Работает полностью на устройстве (LiteRT-LM) без API-ключа и без интернета после скачивания.",
+                        text = s.settingsLocalOfflineInfo,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     if (downloadState.downloadedBytes > 0L && downloadState.totalBytes > 0L) {
                         Text(
-                            text = "Загружено ранее: ${formatFileSize(downloadState.downloadedBytes)} / ${formatFileSize(downloadState.totalBytes)} — загрузка продолжится с места остановки.",
+                            text = s.settingsLocalResumeHint(
+                                formatFileSize(downloadState.downloadedBytes),
+                                formatFileSize(downloadState.totalBytes)
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -1256,7 +1433,11 @@ private fun LocalModelDownloadSection(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (downloadState.downloadedBytes > 0L) "Продолжить загрузку" else "Скачать модель",
+                            text = if (downloadState.downloadedBytes > 0L) {
+                                s.settingsLocalContinueDownload
+                            } else {
+                                s.settingsLocalDownloadButton
+                            },
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -1271,10 +1452,12 @@ private fun LocalModelDownloadSection(
                 val (totalBytes, availBytes) = memorySummary
                 val totalGb = totalBytes / (1024.0 * 1024.0 * 1024.0)
                 val availGb = availBytes / (1024.0 * 1024.0 * 1024.0)
+                val totalGbStr = String.format(java.util.Locale.US, "%.1f", totalGb)
+                val availGbStr = String.format(java.util.Locale.US, "%.1f", availGb)
                 val ramHint = if (totalGb < 10.0) {
-                    "ОЗУ: ${String.format(java.util.Locale.US, "%.1f", totalGb)} ГБ (свободно ${String.format(java.util.Locale.US, "%.1f", availGb)} ГБ) • для стабильной работы рекомендуется CPU и модель E2B"
+                    s.settingsLocalRamLowHint(totalGbStr, availGbStr)
                 } else {
-                    "ОЗУ: ${String.format(java.util.Locale.US, "%.1f", totalGb)} ГБ (свободно ${String.format(java.util.Locale.US, "%.1f", availGb)} ГБ)"
+                    s.settingsLocalRamNormalHint(totalGbStr, availGbStr)
                 }
                 Text(
                     text = ramHint,
@@ -1292,12 +1475,12 @@ private fun LocalModelDownloadSection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Ускорение GPU (OpenCL)",
+                        text = s.settingsLocalGpuTitle,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "Выкл. — запуск на CPU (меньше ОЗУ и без вылетов драйвера). Вкл. — быстрее на флагманах 12+ ГБ ОЗУ.",
+                        text = s.settingsLocalGpuSubtitle,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1315,11 +1498,13 @@ private fun LocalModelDownloadSection(
     if (confirmDeleteOpen) {
         AlertDialog(
             onDismissRequest = { confirmDeleteOpen = false },
-            title = { Text("Удалить локальную модель?") },
+            title = { Text(s.settingsLocalDeleteDialogTitle) },
             text = {
                 Text(
-                    text = "Файл «$modelLabel» (${formatFileSize(downloadState.totalBytes)}) будет удалён с устройства. " +
-                        "Чтобы снова использовать эту модель, её придётся скачать заново."
+                    text = s.settingsLocalDeleteDialogBody(
+                        modelLabel,
+                        formatFileSize(downloadState.totalBytes)
+                    )
                 )
             },
             confirmButton = {
@@ -1333,12 +1518,12 @@ private fun LocalModelDownloadSection(
                         contentColor = MaterialTheme.colorScheme.onError
                     )
                 ) {
-                    Text("Удалить")
+                    Text(s.commonDelete)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDeleteOpen = false }) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
             }
         )
@@ -1370,6 +1555,52 @@ private fun SettingsSectionCard(
                 fontWeight = FontWeight.SemiBold
             )
             content()
+        }
+    }
+}
+
+@Composable
+private fun CompactOptionPill(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        color = containerColor,
+        shape = RoundedCornerShape(14.dp),
+        border = if (selected) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        modifier = modifier.clickable(onClick = onClick)
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 11.dp, horizontal = 8.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1482,19 +1713,32 @@ internal fun SettingsActionRow(
 private fun GlobalAuthorDialog(
     currentName: String,
     currentEmail: String,
+    hasOverride: Boolean,
     onDismiss: () -> Unit,
-    onSave: (name: String, email: String) -> Unit
+    onSave: (name: String, email: String) -> Unit,
+    onReset: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf(currentName) }
     var email by remember { mutableStateOf(currentEmail) }
 
     PocketFormDialog(
-        title = "Автор коммитов",
-        subtitle = "Используется по умолчанию во всех репозиториях",
+        title = s.gitAuthorTitle,
+        subtitle = s.settingsGlobalAuthorSubtitle,
         icon = Icons.Rounded.Person,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            if (hasOverride) {
+                TextButton(
+                    onClick = {
+                        onReset()
+                        onDismiss()
+                    }
+                ) {
+                    Text(s.commonReset, color = MaterialTheme.colorScheme.error)
+                }
+            }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onSave(name, email)
@@ -1504,14 +1748,14 @@ private fun GlobalAuthorDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
-            label = { Text("Имя автора (user.name)") },
+            label = { Text(s.repoAuthorNameLabel) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
@@ -1520,7 +1764,7 @@ private fun GlobalAuthorDialog(
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
-            label = { Text("Email автора (user.email)") },
+            label = { Text(s.repoAuthorEmailLabel) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
@@ -1539,12 +1783,13 @@ private fun ProjectAuthorDialog(
     onSave: (name: String, email: String) -> Unit,
     onReset: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf(currentName) }
     var email by remember { mutableStateOf(currentEmail) }
 
     PocketFormDialog(
-        title = "Автор коммитов проекта",
-        subtitle = "Используется для всех репозиториев проекта «$projectName», если у репозитория не задан свой автор.",
+        title = s.settingsProjectAuthorTitle,
+        subtitle = s.settingsProjectAuthorSubtitle(projectName),
         icon = Icons.Rounded.Person,
         onDismiss = onDismiss,
         footerActions = {
@@ -1555,10 +1800,10 @@ private fun ProjectAuthorDialog(
                         onDismiss()
                     }
                 ) {
-                    Text("Сбросить", color = MaterialTheme.colorScheme.error)
+                    Text(s.commonReset, color = MaterialTheme.colorScheme.error)
                 }
             }
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onSave(name, email)
@@ -1568,14 +1813,14 @@ private fun ProjectAuthorDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
-            label = { Text("Имя автора (user.name)") },
+            label = { Text(s.repoAuthorNameLabel) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
@@ -1584,11 +1829,210 @@ private fun ProjectAuthorDialog(
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
-            label = { Text("Email автора (user.email)") },
+            label = { Text(s.repoAuthorEmailLabel) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+@Composable
+private fun OAuthAccountsSection(
+    accounts: List<GitOAuthAccount>,
+    defaultIdsByHost: Map<String, String>,
+    onSignInGitHub: () -> Unit,
+    onSignInGitLab: () -> Unit,
+    onSetDefaultForHost: (host: String, accountId: String) -> Unit,
+    onRemoveAccount: (accountId: String) -> Unit
+) {
+    val s = LocalAppStrings.current
+    val countsByHost = remember(accounts) {
+        accounts.groupingBy { it.normalizedHost }.eachCount()
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = s.oauthAccountsTitle,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        if (accounts.isEmpty()) {
+            Text(
+                text = s.oauthAccountsEmptyHint,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            accounts.forEach { account ->
+                val sameHostCount = countsByHost[account.normalizedHost] ?: 1
+                val isHostDefault = defaultIdsByHost[account.normalizedHost] == account.id ||
+                    (defaultIdsByHost[account.normalizedHost] == null &&
+                        accounts.firstOrNull { it.normalizedHost == account.normalizedHost }?.id == account.id)
+
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (sameHostCount > 1 && isHostDefault) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                        } else {
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
+                        }
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (sameHostCount > 1 && !isHostDefault) {
+                                Modifier.clickable {
+                                    onSetDefaultForHost(account.normalizedHost, account.id)
+                                }
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SettingsIconBadge(icon = Icons.Rounded.AccountCircle)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Surface(
+                                    color = if (account.provider == GitOAuthProvider.GITHUB) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    },
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = account.provider.displayName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (account.provider == GitOAuthProvider.GITHUB) {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onTertiaryContainer
+                                        },
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "@${account.username}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (sameHostCount > 1 && isHostDefault) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = s.oauthDefaultForHostBadge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            val subtitleText = buildString {
+                                if (account.isSelfHosted) {
+                                    append(account.normalizedHost)
+                                    if (!account.email.isNullOrBlank()) append(" • ")
+                                }
+                                if (!account.email.isNullOrBlank()) {
+                                    append(account.email)
+                                }
+                                if (sameHostCount > 1 && !isHostDefault) {
+                                    if (isNotEmpty()) append(" • ")
+                                    append(s.oauthMakeDefaultForHost)
+                                }
+                            }
+                            if (subtitleText.isNotBlank()) {
+                                Text(
+                                    text = subtitleText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onRemoveAccount(account.id) }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Logout,
+                                contentDescription = s.oauthDisconnectAccountDesc,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onSignInGitHub,
+                shape = FormFieldShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AccountCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "GitHub",
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1
+                )
+            }
+            OutlinedButton(
+                onClick = onSignInGitLab,
+                shape = FormFieldShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AccountCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "GitLab",
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }

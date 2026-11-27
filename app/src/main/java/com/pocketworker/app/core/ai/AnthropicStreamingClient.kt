@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.AiProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -56,24 +57,24 @@ class AnthropicStreamingClient(
                         val rawData = line.removePrefix("data:").trim()
                         if (rawData.isEmpty() || rawData == "[DONE]") return@postStream
                         val payload = runCatching { JSONObject(rawData) }.getOrNull() ?: return@postStream
-                        val eventType = payload.optString("type", currentEventName.orEmpty())
+                        val eventType = payload.optNonNullString("type", currentEventName.orEmpty())
 
                         when (eventType) {
                             "content_block_start" -> {
                                 val index = payload.optInt("index", -1)
                                 val block = payload.optJSONObject("content_block") ?: return@postStream
-                                val blockType = block.optString("type", "")
+                                val blockType = block.optNonNullString("type")
                                 when (blockType) {
                                     "text" -> {
                                         blocks[index] = ActiveBlock(type = "text")
-                                        val initialText = block.optString("text", "")
+                                        val initialText = block.optNonNullString("text")
                                         if (initialText.isNotEmpty()) {
                                             emit(LlmStreamEvent.TextDelta(initialText))
                                         }
                                     }
                                     "tool_use" -> {
-                                        val id = block.optString("id", "tool_$index")
-                                        val name = block.optString("name", "")
+                                        val id = block.optNonNullString("id", "tool_$index").ifBlank { "tool_$index" }
+                                        val name = block.optNonNullString("name")
                                         val initialInput = block.optJSONObject("input")
                                         val buf = StringBuilder()
                                         if (initialInput != null && initialInput.length() > 0) {
@@ -88,8 +89,8 @@ class AnthropicStreamingClient(
                                         emit(LlmStreamEvent.ToolUseStarted(id = id, name = name, isWebSearch = false))
                                     }
                                     "server_tool_use" -> {
-                                        val id = block.optString("id", "server_tool_$index")
-                                        val name = block.optString("name", "web_search")
+                                        val id = block.optNonNullString("id", "server_tool_$index").ifBlank { "server_tool_$index" }
+                                        val name = block.optNonNullString("name", "web_search").ifBlank { "web_search" }
                                         val isWeb = name.contains("search", ignoreCase = true)
                                         blocks[index] = ActiveBlock(
                                             type = "server_tool_use",
@@ -108,16 +109,16 @@ class AnthropicStreamingClient(
                             "content_block_delta" -> {
                                 val index = payload.optInt("index", -1)
                                 val delta = payload.optJSONObject("delta") ?: return@postStream
-                                val deltaType = delta.optString("type", "")
+                                val deltaType = delta.optNonNullString("type")
                                 when (deltaType) {
                                     "text_delta" -> {
-                                        val text = delta.optString("text", "")
+                                        val text = delta.optNonNullString("text")
                                         if (text.isNotEmpty()) {
                                             emit(LlmStreamEvent.TextDelta(text))
                                         }
                                     }
                                     "input_json_delta" -> {
-                                        val partial = delta.optString("partial_json", "")
+                                        val partial = delta.optNonNullString("partial_json")
                                         val active = blocks[index]
                                         if (active != null && partial.isNotEmpty()) {
                                             active.inputBuffer.append(partial)
@@ -145,7 +146,7 @@ class AnthropicStreamingClient(
                                     }
                                     "server_tool_use" -> {
                                         val query = runCatching {
-                                            JSONObject(active.inputBuffer.toString()).optString("query", "").takeIf { it.isNotBlank() }
+                                            JSONObject(active.inputBuffer.toString()).optNonNullString("query").takeIf { it.isNotBlank() }
                                         }.getOrNull()
                                         emit(LlmStreamEvent.WebSearchUpdate(active.id, query, finished = true))
                                     }
@@ -154,7 +155,7 @@ class AnthropicStreamingClient(
 
                             "message_delta" -> {
                                 val delta = payload.optJSONObject("delta")
-                                val reason = delta?.optString("stop_reason", "")?.takeIf { it.isNotBlank() && it != "null" }
+                                val reason = delta?.optNonNullString("stop_reason")?.takeIf { it.isNotBlank() }
                                 if (reason != null) stopReason = reason
                             }
 
@@ -165,8 +166,8 @@ class AnthropicStreamingClient(
 
                             "error" -> {
                                 val errObj = payload.optJSONObject("error")
-                                val msg = errObj?.optString("message", "").orEmpty()
-                                    .ifBlank { "Неизвестная ошибка потока Claude" }
+                                val msg = errObj?.optNonNullString("message").orEmpty()
+                                    .ifBlank { AppLocale.current.llmErrClaudeStreamUnknown }
                                 emit(LlmStreamEvent.Error(message = msg))
                                 finishedEmitted = true
                             }

@@ -5,6 +5,7 @@ import com.pocketworker.app.core.git.FileReadResult
 import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.ProjectFileManager
 import com.pocketworker.app.core.git.RepoEntry
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.ProjectRegistry
 import com.pocketworker.app.ui.workspace.CodeLanguage
 import com.pocketworker.app.ui.workspace.CodeSyntaxHighlighter
@@ -543,7 +544,7 @@ private class FsReadFileTool(
                 errorCode = McpErrorCodes.BINARY_FILE,
                 message = "Файл '$relativePath' бинарный (${readResult.sizeBytes} Б) и не может быть прочитан как текст.",
                 recoverableByAgent = false,
-                userMessageHint = "Бинарные файлы не редактируются текстовым агентом."
+                userMessageHint = AppLocale.current.mcpHintBinaryNotEditable
             )
             is FileReadResult.TooLarge -> McpToolResult.error(
                 errorCode = McpErrorCodes.FILE_TOO_LARGE,
@@ -644,7 +645,7 @@ private class FsEditFileTool(
         if (arguments.optBoolean("dryRun", false)) McpPermissionTier.AUTO else McpPermissionTier.CONTROLLED_WRITE
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Изменить файл ${arguments.optString("relativePath")}"
+        AppLocale.current.mcpConfirmEditFile(arguments.optString("relativePath"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")
@@ -800,7 +801,7 @@ private class FsWriteFileTool(
     )
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Записать файл ${arguments.optString("relativePath")}"
+        AppLocale.current.mcpConfirmWriteFile(arguments.optString("relativePath"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")
@@ -873,7 +874,7 @@ private class FsReplaceAcrossFilesTool(
         if (arguments.optBoolean("dryRun", false)) McpPermissionTier.AUTO else McpPermissionTier.CONTROLLED_WRITE
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Массовая замена «${arguments.optString("query")}» → «${arguments.optString("replacement")}»"
+        AppLocale.current.mcpConfirmReplaceAll(arguments.optString("query"), arguments.optString("replacement"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")
@@ -996,7 +997,7 @@ private class FsManageStructureTool(
 
     override fun buildConfirmationSummary(arguments: JSONObject): String {
         val count = arguments.optJSONArray("operations")?.length() ?: 0
-        return "Изменить структуру папок/файлов ($count опер.)"
+        return AppLocale.current.mcpConfirmFsBatch(count)
     }
 
     private data class PlannedOp(
@@ -1145,7 +1146,7 @@ private class FsDeleteEntryTool(
     )
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Удалить «${arguments.optString("relativePath")}»"
+        AppLocale.current.mcpConfirmDeletePath(arguments.optString("relativePath"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")

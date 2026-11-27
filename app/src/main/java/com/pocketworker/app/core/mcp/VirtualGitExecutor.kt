@@ -2,7 +2,9 @@ package com.pocketworker.app.core.mcp
 
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.ProjectFileManager
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.CredentialStore
 import org.eclipse.jgit.api.CreateBranchCommand
 import org.eclipse.jgit.api.Git
@@ -217,7 +219,8 @@ internal class VirtualGitCommandTool(
     private val fileManager: ProjectFileManager,
     private val gitEngine: GitEngine,
     private val credentialStore: CredentialStore,
-    private val resolver: McpWorkspaceResolver
+    private val resolver: McpWorkspaceResolver,
+    private val oauthManager: GitOAuthManager? = null
 ) : McpTool {
 
     override val definition = McpToolDefinition(
@@ -305,6 +308,7 @@ internal class VirtualGitCommandTool(
     }
 
     override fun buildConfirmationSummary(arguments: JSONObject): String {
+        val s = AppLocale.current
         val raw = arguments.optNonBlankString("command") ?: ""
         val display = if (raw.lowercase(Locale.ROOT).startsWith("git ")) raw else "git $raw"
         val parsed = (VirtualGitTokenizer.parse(raw) as? GitTokenizeResult.Ok)?.parsed
@@ -312,21 +316,21 @@ internal class VirtualGitCommandTool(
         val args = parsed?.args.orEmpty()
         return when {
             sub == "push" && args.any { it == "-f" || it == "--force" || it == "--force-with-lease" } ->
-                "ОПАСНО: выполнить force push на удалённый сервер: $display"
+                s.mcpConfirmGitForcePush(display)
             sub == "push" ->
-                "Отправить изменения на удалённый сервер: $display"
+                s.mcpConfirmGitPush(display)
             sub == "reset" && args.any { it == "--hard" } ->
-                "ОПАСНО: выполнить жёсткий сброс (локальные изменения будут потеряны): $display"
+                s.mcpConfirmGitResetHard(display)
             sub == "clean" ->
-                "ОПАСНО: удалить неотслеживаемые файлы: $display"
+                s.mcpConfirmGitClean(display)
             sub == "restore" || (sub == "checkout" && args.contains("--")) ->
-                "ОПАСНО: откатить незакоммиченные изменения файлов: $display"
+                s.mcpConfirmGitRestore(display)
             sub == "branch" && args.any { it == "-d" || it == "-D" || it == "--delete" } ->
-                "Удалить ветку: $display"
+                s.mcpConfirmGitDeleteBranch(display)
             sub == "stash" && args.firstOrNull() in setOf("drop", "clear") ->
-                "ОПАСНО: удалить сохранённый stash: $display"
+                s.mcpConfirmGitStashDelete(display)
             else ->
-                "Выполнить Git-команду: $display"
+                s.mcpConfirmGitCommand(display)
         }
     }
 
@@ -354,7 +358,22 @@ internal class VirtualGitCommandTool(
             )
         }
 
-        val creds = credentialStore.resolveForRepo(projectId, repoId)
+        val remoteUrlForAuth = if (parsed.subcommand in setOf("fetch", "pull", "push")) {
+            val remotes = runCatching { gitEngine.getRemotes(resolved.dir) }.getOrDefault(emptyList())
+            val positionalRemote = parsed.args.firstOrNull { !it.startsWith("-") }
+            val matched = positionalRemote?.let { name -> remotes.firstOrNull { it.name == name } }
+                ?: remotes.firstOrNull { it.name == "origin" }
+                ?: remotes.firstOrNull()
+            matched?.pushUrl ?: matched?.fetchUrl ?: resolved.repo.remoteUrl
+        } else {
+            resolved.repo.remoteUrl
+        }
+        val creds = if (parsed.subcommand in setOf("fetch", "pull", "push")) {
+            oauthManager?.resolveFreshCredentials(projectId, repoId, remoteUrlForAuth)
+                ?: credentialStore.resolveForRepo(projectId, repoId, remoteUrlForAuth)
+        } else {
+            credentialStore.resolveForRepo(projectId, repoId, remoteUrlForAuth)
+        }
         return try {
             when (parsed.subcommand) {
                 "init" -> execInit(resolved.dir, parsed)
@@ -449,7 +468,7 @@ internal class VirtualGitCommandTool(
                 message = "Git hooks не выполняются на Android-устройстве (JGit не запускает shell-хуки).",
                 recoverableByAgent = false,
                 reason = "В мобильном окружении PocketWorker нет POSIX shell для pre-commit/pre-push скриптов.",
-                userMessageHint = "Git hooks недоступны на телефоне. Проверки проекта можно выполнить на ПК или в CI."
+                userMessageHint = AppLocale.current.mcpHintGitHooksUnavailable
             )
         }
 
@@ -2681,7 +2700,7 @@ internal class VirtualGitCommandTool(
                     errorCode = McpErrorCodes.INTERNAL_ERROR,
                     message = "Push отклонён сервером: ${otherErrors.joinToString("; ")}",
                     recoverableByAgent = false,
-                    userMessageHint = "Удалённый сервер отклонил push: ${otherErrors.joinToString("; ")}"
+                    userMessageHint = AppLocale.current.mcpHintPushRejected(otherErrors.joinToString("; "))
                 )
             }
 
@@ -2743,7 +2762,7 @@ internal class VirtualGitCommandTool(
         recoverableByAgent = false,
         reason = "PocketWorker поддерживает только HTTPS-транспорт с Personal Access Token (PAT).",
         suggestedAlternatives = listOf("Попроси пользователя переключить remote на HTTPS URL или добавить PAT в настройках"),
-        userMessageHint = "SSH-ключи не поддерживаются в PocketWorker. Используйте HTTPS URL репозитория и Personal Access Token."
+        userMessageHint = AppLocale.current.mcpHintSshUnsupported
     )
 
     private fun mapGitRuntimeFailure(ex: Throwable): McpToolResult {

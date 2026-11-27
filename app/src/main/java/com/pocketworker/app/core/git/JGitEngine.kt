@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.git
 
+import com.pocketworker.app.core.i18n.AppLocale
 import org.eclipse.jgit.api.CreateBranchCommand
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.ListBranchCommand
@@ -47,10 +48,11 @@ class JGitEngine : GitEngine {
         onProgress: (CloneProgress) -> Unit,
         isCancelled: () -> Boolean
     ): GitStatusSummary {
+        val s = AppLocale.current
         val cleanUrl = url.trim()
-        require(cleanUrl.isNotEmpty()) { "URL репозитория не может быть пустым" }
+        require(cleanUrl.isNotEmpty()) { s.jgitErrEmptyUrl }
         if (targetDir.exists() && targetDir.listFiles()?.isNotEmpty() == true) {
-            throw IllegalStateException("Целевая папка уже существует и не пуста: ${targetDir.name}")
+            throw IllegalStateException(s.jgitErrTargetDirNotEmpty(targetDir.name))
         }
         targetDir.mkdirs()
 
@@ -60,16 +62,16 @@ class JGitEngine : GitEngine {
                 .setDirectory(targetDir)
                 .setCloneAllBranches(true)
                 .setProgressMonitor(object : ProgressMonitor {
-                    private var currentTask = "Подключение..."
+                    private var currentTask = s.jgitProgressConnecting
                     private var totalWork = 0
                     private var completedWork = 0
 
                     override fun start(totalTasks: Int) {
-                        onProgress(CloneProgress("Инициализация клонирования...", 0, totalTasks))
+                        onProgress(CloneProgress(s.jgitProgressInitClone, 0, totalTasks))
                     }
 
                     override fun beginTask(title: String?, totalWork: Int) {
-                        currentTask = title ?: "Загрузка..."
+                        currentTask = title ?: s.jgitProgressDownloading
                         this.totalWork = totalWork
                         this.completedWork = 0
                         onProgress(CloneProgress(currentTask, 0, totalWork))
@@ -113,8 +115,9 @@ class JGitEngine : GitEngine {
         authorName: String,
         authorEmail: String
     ) {
+        val s = AppLocale.current
         if (targetDir.exists() && targetDir.listFiles()?.isNotEmpty() == true) {
-            throw IllegalStateException("Папка проекта уже существует: ${targetDir.name}")
+            throw IllegalStateException(s.jgitErrProjectDirExists(targetDir.name))
         }
         targetDir.mkdirs()
 
@@ -140,7 +143,7 @@ class JGitEngine : GitEngine {
 
                 if (createReadmeAndCommit) {
                     val readme = File(targetDir, "README.md")
-                    readme.writeText("# $projectName\n\nСоздано в PocketWorker.\n", StandardCharsets.UTF_8)
+                    readme.writeText("# $projectName\n\n${s.jgitReadmeCreatedLine}\n", StandardCharsets.UTF_8)
                     git.add().addFilepattern("README.md").call()
                     val ident = PersonIdent(
                         authorName.ifBlank { GitEngine.DEFAULT_AUTHOR_NAME },
@@ -182,7 +185,7 @@ class JGitEngine : GitEngine {
                 lastCommitMessage = null,
                 lastCommitTime = null,
                 remoteUrl = entry.remoteUrl,
-                errorMessage = "Папка репозитория не найдена на диске"
+                errorMessage = AppLocale.current.jgitErrRepoDirMissing
             )
         }
         if (!isGitRepository(dir)) {
@@ -237,7 +240,7 @@ class JGitEngine : GitEngine {
                 lastCommitMessage = null,
                 lastCommitTime = dir.lastModified(),
                 remoteUrl = entry.remoteUrl,
-                errorMessage = t.localizedMessage ?: "Ошибка чтения Git"
+                errorMessage = t.localizedMessage ?: AppLocale.current.jgitErrReadGit
             )
         }
     }
@@ -277,6 +280,22 @@ class JGitEngine : GitEngine {
                 if (tracking != null) {
                     ahead = tracking.aheadCount
                     behind = tracking.behindCount
+                } else {
+                    // Fallback when remote-tracking ref exists (e.g. after auto-fetch) even without explicit upstream config
+                    val remotes = repo.remoteNames
+                    val fallbackRemote = if (Constants.DEFAULT_REMOTE_NAME in remotes) {
+                        Constants.DEFAULT_REMOTE_NAME
+                    } else {
+                        remotes.firstOrNull()
+                    }
+                    val remoteRefId = fallbackRemote?.let { r ->
+                        repo.resolve("${Constants.R_REMOTES}$r/$currentBranch")
+                    }
+                    if (remoteRefId != null) {
+                        val counts = computeAheadBehind(repo, headObjId, remoteRefId)
+                        ahead = counts.first
+                        behind = counts.second
+                    }
                 }
             }
 
@@ -419,7 +438,7 @@ class JGitEngine : GitEngine {
         amend: Boolean
     ): GitCommit {
         val cleanMsg = message.trim()
-        require(cleanMsg.isNotEmpty()) { "Сообщение коммита не может быть пустым" }
+        require(cleanMsg.isNotEmpty()) { AppLocale.current.jgitErrEmptyCommitMsg }
 
         Git.open(repoDir).use { git ->
             val ident = PersonIdent(
@@ -485,11 +504,11 @@ class JGitEngine : GitEngine {
         checkout: Boolean
     ) {
         val cleanName = branchName.trim()
-        require(cleanName.isNotEmpty()) { "Имя ветки не может быть пустым" }
+        require(cleanName.isNotEmpty()) { AppLocale.current.jgitErrEmptyBranchName }
 
         Git.open(repoDir).use { git ->
             if (git.repository.resolve(Constants.HEAD) == null) {
-                throw IllegalStateException("В репозитории ещё нет ни одного коммита для создания ветки")
+                throw IllegalStateException(AppLocale.current.jgitErrNoCommitsForBranch)
             }
             if (checkout) {
                 val cmd = git.checkout()
@@ -539,7 +558,7 @@ class JGitEngine : GitEngine {
 
     override fun renameBranch(repoDir: File, oldName: String, newName: String) {
         val cleanNew = newName.trim()
-        require(cleanNew.isNotEmpty()) { "Новое имя ветки не может быть пустым" }
+        require(cleanNew.isNotEmpty()) { AppLocale.current.jgitErrEmptyNewBranchName }
         Git.open(repoDir).use { git ->
             git.branchRename()
                 .setOldName(oldName)
@@ -560,7 +579,7 @@ class JGitEngine : GitEngine {
     override fun mergeBranch(repoDir: File, sourceBranch: String): BranchMergeResult {
         Git.open(repoDir).use { git ->
             val targetId = git.repository.resolve(sourceBranch)
-                ?: throw IllegalArgumentException("Ветка не найдена: $sourceBranch")
+                ?: throw IllegalArgumentException(AppLocale.current.jgitErrBranchNotFound(sourceBranch))
             val result = git.merge()
                 .include(targetId)
                 .call()
@@ -589,10 +608,11 @@ class JGitEngine : GitEngine {
     }
 
     override fun addRemote(repoDir: File, name: String, url: String) {
+        val s = AppLocale.current
         val cleanName = name.trim()
         val cleanUrl = url.trim()
-        require(cleanName.isNotEmpty()) { "Имя remote не может быть пустым" }
-        require(cleanUrl.isNotEmpty()) { "URL remote не может быть пустым" }
+        require(cleanName.isNotEmpty()) { s.jgitErrEmptyRemoteName }
+        require(cleanUrl.isNotEmpty()) { s.jgitErrEmptyRemoteUrl }
         Git.open(repoDir).use { git ->
             git.remoteAdd()
                 .setName(cleanName)
@@ -603,7 +623,7 @@ class JGitEngine : GitEngine {
 
     override fun updateRemoteUrl(repoDir: File, name: String, newUrl: String) {
         val cleanUrl = newUrl.trim()
-        require(cleanUrl.isNotEmpty()) { "URL remote не может быть пустым" }
+        require(cleanUrl.isNotEmpty()) { AppLocale.current.jgitErrEmptyRemoteUrl }
         Git.open(repoDir).use { git ->
             git.remoteSetUrl()
                 .setRemoteName(name)
@@ -625,6 +645,7 @@ class JGitEngine : GitEngine {
         remoteName: String,
         credentials: GitCredentials?
     ): String {
+        val s = AppLocale.current
         Git.open(repoDir).use { git ->
             val cmd = git.fetch()
                 .setRemote(remoteName)
@@ -633,10 +654,48 @@ class JGitEngine : GitEngine {
             val result = cmd.call()
             val updatesCount = result.trackingRefUpdates.size
             return if (updatesCount == 0) {
-                "Fetch ($remoteName): всё актуально"
+                s.jgitFetchUpToDate(remoteName)
             } else {
-                "Fetch ($remoteName): обновлено ссылок — $updatesCount"
+                s.jgitFetchUpdatedRefs(remoteName, updatesCount)
             }
+        }
+    }
+
+    override fun fetchCurrentBranch(
+        repoDir: File,
+        remoteName: String?,
+        credentials: GitCredentials?
+    ): Boolean {
+        if (!isGitRepository(repoDir)) return false
+        Git.open(repoDir).use { git ->
+            val repo = git.repository
+            val headRef = repo.exactRef(Constants.HEAD) ?: return false
+            if (!headRef.isSymbolic) return false
+            val branchName = repo.branch?.takeIf { it.isNotBlank() } ?: return false
+            val remotes = repo.remoteNames
+            if (remotes.isEmpty()) return false
+
+            val branchCfg = BranchConfig(repo.config, branchName)
+            val resolvedRemote = remoteName?.takeIf { it in remotes }
+                ?: branchCfg.remote?.takeIf { it in remotes }
+                ?: if (Constants.DEFAULT_REMOTE_NAME in remotes) {
+                    Constants.DEFAULT_REMOTE_NAME
+                } else {
+                    remotes.first()
+                }
+            val remoteBranch = branchCfg.merge
+                ?.removePrefix(Constants.R_HEADS)
+                ?.takeIf { it.isNotBlank() }
+                ?: branchName
+
+            val refSpec = RefSpec("+${Constants.R_HEADS}$remoteBranch:${Constants.R_REMOTES}$resolvedRemote/$remoteBranch")
+            val cmd = git.fetch()
+                .setRemote(resolvedRemote)
+                .setRefSpecs(refSpec)
+                .setTimeout(15)
+            buildCredentialsProvider(credentials)?.let { cmd.setCredentialsProvider(it) }
+            cmd.call()
+            return true
         }
     }
 
@@ -659,15 +718,16 @@ class JGitEngine : GitEngine {
             val result = cmd.call()
             val mergeStatus = result.mergeResult?.mergeStatus?.toString()
             val fetchCount = result.fetchResult?.trackingRefUpdates?.size ?: 0
+            val s = AppLocale.current
             val summary = when {
                 result.rebaseResult != null -> "Pull (rebase): ${result.rebaseResult.status}"
                 mergeStatus != null -> "Pull: $mergeStatus"
-                else -> if (result.isSuccessful) "Pull выполнен" else "Pull не выполнен"
+                else -> if (result.isSuccessful) s.jgitPullDone else s.jgitPullFailed
             }
             return PullResultInfo(
                 isSuccessful = result.isSuccessful,
                 summary = summary,
-                fetchSummary = "Обновлено ссылок: $fetchCount"
+                fetchSummary = s.jgitUpdatedRefsSummary(fetchCount)
             )
         }
     }
@@ -679,13 +739,14 @@ class JGitEngine : GitEngine {
         credentials: GitCredentials?,
         force: Boolean
     ): String {
+        val s = AppLocale.current
         Git.open(repoDir).use { git ->
             val repo = git.repository
             if (repo.resolve(Constants.HEAD) == null) {
-                throw IllegalStateException("Нечего отправлять: сделайте хотя бы один коммит")
+                throw IllegalStateException(s.jgitErrNothingToPush)
             }
             val targetBranch = branchName ?: repo.branch
-                ?: throw IllegalStateException("Не удалось определить текущую ветку")
+                ?: throw IllegalStateException(s.jgitErrNoCurrentBranch)
 
             val refSpec = RefSpec("${Constants.R_HEADS}$targetBranch:${Constants.R_HEADS}$targetBranch")
             val cmd = git.push()
@@ -729,7 +790,7 @@ class JGitEngine : GitEngine {
     ): GitStashEntry? {
         Git.open(repoDir).use { git ->
             if (git.repository.resolve(Constants.HEAD) == null) {
-                throw IllegalStateException("Нельзя создать stash в репозитории без коммитов")
+                throw IllegalStateException(AppLocale.current.jgitErrStashNoCommits)
             }
             val cmd = git.stashCreate().setIncludeUntracked(includeUntracked)
             val cleanMsg = message?.trim()?.ifEmpty { null }
@@ -823,11 +884,12 @@ class JGitEngine : GitEngine {
         authorName: String,
         authorEmail: String
     ) {
+        val s = AppLocale.current
         val cleanName = name.trim()
-        require(cleanName.isNotEmpty()) { "Имя тега не может быть пустым" }
+        require(cleanName.isNotEmpty()) { s.jgitErrEmptyTagName }
         Git.open(repoDir).use { git ->
             if (git.repository.resolve(Constants.HEAD) == null) {
-                throw IllegalStateException("Нельзя создать тег в репозитории без коммитов")
+                throw IllegalStateException(s.jgitErrTagNoCommits)
             }
             val cleanMsg = message?.trim()?.ifEmpty { null }
             val cmd = git.tag().setName(cleanName)
@@ -866,7 +928,7 @@ class JGitEngine : GitEngine {
                 .setPushTags()
             buildCredentialsProvider(credentials)?.let { cmd.setCredentialsProvider(it) }
             val results = cmd.call()
-            return validateAndFormatPushResults(results, remoteName, "теги")
+            return validateAndFormatPushResults(results, remoteName, AppLocale.current.jgitTagsTargetWord)
         }
     }
 
@@ -875,6 +937,7 @@ class JGitEngine : GitEngine {
         remoteName: String,
         fallbackTarget: String
     ): String {
+        val s = AppLocale.current
         val errors = mutableListOf<String>()
         val okMessages = mutableListOf<String>()
         for (pushResult in results) {
@@ -894,12 +957,12 @@ class JGitEngine : GitEngine {
             }
         }
         if (errors.isNotEmpty()) {
-            throw IllegalStateException("Ошибка Push: ${errors.joinToString("; ")}")
+            throw IllegalStateException(s.jgitErrPush(errors.joinToString("; ")))
         }
         return if (okMessages.isEmpty()) {
-            "Push ($fallbackTarget) в $remoteName выполнен"
+            s.jgitPushFallbackOk(fallbackTarget, remoteName)
         } else {
-            "Push в $remoteName: ${okMessages.joinToString(", ")}"
+            s.jgitPushSummary(remoteName, okMessages.joinToString(", "))
         }
     }
 
@@ -943,7 +1006,7 @@ class JGitEngine : GitEngine {
         Git.open(repoDir).use { git ->
             val repo = git.repository
             val objId = repo.resolve(commitId)
-                ?: throw IllegalArgumentException("Коммит не найден: $commitId")
+                ?: throw IllegalArgumentException(AppLocale.current.jgitErrCommitNotFound(commitId))
             val badgesByCommit = buildRefBadgesMap(repo)
 
             RevWalk(repo).use { revWalk ->
@@ -1001,7 +1064,7 @@ class JGitEngine : GitEngine {
                 if (!file.exists() || !file.isFile) return ""
                 val bytes = file.readBytes()
                 if (bytes.take(4096).any { it.toInt() == 0 }) {
-                    return "Бинарный файл (${bytes.size} байт)"
+                    return AppLocale.current.jgitBinaryFileSummary(bytes.size)
                 }
                 val text = String(bytes, StandardCharsets.UTF_8)
                 val lines = if (text.isEmpty()) {
@@ -1048,7 +1111,7 @@ class JGitEngine : GitEngine {
         Git.open(repoDir).use { git ->
             val repo = git.repository
             val objId = repo.resolve(commitId)
-                ?: throw IllegalArgumentException("Коммит не найден: $commitId")
+                ?: throw IllegalArgumentException(AppLocale.current.jgitErrCommitNotFound(commitId))
             RevWalk(repo).use { revWalk ->
                 val commit = revWalk.parseCommit(objId)
                 val parent = if (commit.parentCount > 0) {
@@ -1075,6 +1138,50 @@ class JGitEngine : GitEngine {
                 }
             }
         }
+    }
+
+    override fun getHeadFileContent(repoDir: File, relativePath: String): String? {
+        if (!isGitRepository(repoDir)) return null
+        val normalized = relativePath.trim().replace('\\', '/').trimStart('/')
+        if (normalized.isEmpty()) return null
+        return runCatching {
+            Git.open(repoDir).use { git ->
+                val repo = git.repository
+                val headId = repo.resolve(Constants.HEAD) ?: return@use null
+                RevWalk(repo).use { revWalk ->
+                    val commit = revWalk.parseCommit(headId)
+                    org.eclipse.jgit.treewalk.TreeWalk.forPath(repo, normalized, commit.tree)?.use { tw ->
+                        val objectId = tw.getObjectId(0)
+                        val loader = repo.open(objectId)
+                        if (loader.size > 2L * 1024L * 1024L) return@use null
+                        val bytes = loader.bytes
+                        val sampleLen = minOf(bytes.size, 8192)
+                        for (i in 0 until sampleLen) {
+                            if (bytes[i].toInt() == 0) return@use null
+                        }
+                        String(bytes, StandardCharsets.UTF_8)
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun computeAheadBehind(
+        repo: Repository,
+        localId: ObjectId,
+        remoteId: ObjectId
+    ): Pair<Int, Int> {
+        if (localId == remoteId) return 0 to 0
+        return runCatching {
+            RevWalk(repo).use { rw ->
+                val localCommit = rw.parseCommit(localId)
+                val remoteCommit = rw.parseCommit(remoteId)
+                val ahead = org.eclipse.jgit.revwalk.RevWalkUtils.count(rw, localCommit, remoteCommit)
+                rw.reset()
+                val behind = org.eclipse.jgit.revwalk.RevWalkUtils.count(rw, remoteCommit, localCommit)
+                ahead to behind
+            }
+        }.getOrDefault(0 to 0)
     }
 
     override fun getAuthorConfig(repoDir: File): Pair<String, String> {

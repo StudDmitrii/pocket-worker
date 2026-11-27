@@ -1,5 +1,10 @@
 package com.pocketworker.app.ui.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
+import com.pocketworker.app.core.i18n.AppStrings
+import com.pocketworker.app.core.i18n.StringsEn
+import com.pocketworker.app.core.i18n.StringsRu
+
 /**
  * Describes where the user currently is in the workspace when opening the AI assistant chat.
  */
@@ -38,6 +43,12 @@ data class AiChatSession(
     val preview: String = "",
     val lastContextKey: String = ""
 ) {
+    fun isUntitledDefault(): Boolean =
+        title == DEFAULT_TITLE || title == StringsRu.aiNewChat || title == StringsEn.aiNewChat
+
+    fun localizedTitle(s: AppStrings = AppLocale.current): String =
+        if (isUntitledDefault()) s.aiNewChat else title
+
     companion object {
         const val DEFAULT_TITLE = "Новый чат"
     }
@@ -57,16 +68,18 @@ fun AiLocationContext.stableContextKey(): String = when (this) {
 /**
  * Builds the context-aware welcome message shown by the AI assistant upon entering chat.
  */
-fun buildAiGreetingMessage(context: AiLocationContext): String {
+fun buildAiGreetingMessage(
+    context: AiLocationContext,
+    s: AppStrings = AppLocale.current
+): String {
     return when (context) {
-        is AiLocationContext.AllProjects ->
-            "Привет! Чем могу помочь? Сейчас ты находишься в папке со всеми проектами, я их вижу."
+        is AiLocationContext.AllProjects -> s.aiGreetingAllProjects
 
         is AiLocationContext.ProjectFolder -> {
             if (context.projectName.isNotBlank()) {
-                "Привет! Чем могу помочь? Сейчас ты находишься в папке проекта «${context.projectName}», я вижу его репозитории."
+                s.aiGreetingProjectNamed(context.projectName)
             } else {
-                "Привет! Чем могу помочь? Сейчас ты находишься в папке проекта, я вижу его репозитории."
+                s.aiGreetingProjectUnnamed
             }
         }
 
@@ -75,15 +88,15 @@ fun buildAiGreetingMessage(context: AiLocationContext): String {
             val cleanRepo = context.repoName.trim()
             if (cleanDir.isNotEmpty()) {
                 if (cleanRepo.isNotEmpty()) {
-                    "Привет! Чем могу помочь? Сейчас ты находишься в папке «$cleanDir» репозитория «$cleanRepo», я её вижу."
+                    s.aiGreetingRepoSubdirNamed(cleanDir, cleanRepo)
                 } else {
-                    "Привет! Чем могу помочь? Сейчас ты находишься в папке «$cleanDir» репозитория, я её вижу."
+                    s.aiGreetingRepoSubdirUnnamed(cleanDir)
                 }
             } else {
                 if (cleanRepo.isNotEmpty()) {
-                    "Привет! Чем могу помочь? Сейчас ты находишься в папке с репозиторием «$cleanRepo», я его вижу."
+                    s.aiGreetingRepoRootNamed(cleanRepo)
                 } else {
-                    "Привет! Чем могу помочь? Сейчас ты находишься в папке с репозиторием, я его вижу."
+                    s.aiGreetingRepoRootUnnamed
                 }
             }
         }
@@ -92,9 +105,55 @@ fun buildAiGreetingMessage(context: AiLocationContext): String {
             val cleanFile = context.filePath.trim()
             val cleanRepo = context.repoName.trim()
             if (cleanRepo.isNotEmpty()) {
-                "Привет! Чем могу помочь? Сейчас ты находишься в файле «$cleanFile» репозитория «$cleanRepo», я его вижу."
+                s.aiGreetingFileWithRepo(cleanFile, cleanRepo)
             } else {
-                "Привет! Чем могу помочь? Сейчас ты находишься в файле «$cleanFile», я его вижу."
+                s.aiGreetingFileWithoutRepo(cleanFile)
+            }
+        }
+    }
+}
+
+/**
+ * Builds the centered welcome prompt shown in an empty/new AI chat above the input field.
+ */
+fun buildAiEmptyStatePrompt(
+    context: AiLocationContext,
+    s: AppStrings = AppLocale.current
+): String {
+    return when (context) {
+        is AiLocationContext.AllProjects -> s.aiEmptyPromptAllProjects
+
+        is AiLocationContext.ProjectFolder -> {
+            val cleanProject = context.projectName.trim()
+            if (cleanProject.isNotEmpty()) {
+                s.aiEmptyPromptProjectNamed(cleanProject)
+            } else {
+                s.aiEmptyPromptProjectUnnamed
+            }
+        }
+
+        is AiLocationContext.Repository -> {
+            val cleanDir = context.currentDir.trim('/')
+            val cleanRepo = context.repoName.trim()
+            when {
+                cleanDir.isNotEmpty() && cleanRepo.isNotEmpty() ->
+                    s.aiEmptyPromptRepoSubdirNamed(cleanDir, cleanRepo)
+                cleanRepo.isNotEmpty() ->
+                    s.aiEmptyPromptRepoNamed(cleanRepo)
+                cleanDir.isNotEmpty() ->
+                    s.aiEmptyPromptDirOnly(cleanDir)
+                else ->
+                    s.aiEmptyPromptRepoUnnamed
+            }
+        }
+
+        is AiLocationContext.File -> {
+            val cleanPath = context.filePath.trim('/')
+            val fileName = cleanPath.substringAfterLast('/')
+            if (fileName.isNotEmpty()) {
+                s.aiEmptyPromptFileNamed(fileName)
+            } else {
+                s.aiEmptyPromptFileUnnamed
             }
         }
     }
@@ -103,19 +162,22 @@ fun buildAiGreetingMessage(context: AiLocationContext): String {
 /**
  * Builds a concise path/location subtitle for the AI chat top bar.
  */
-fun formatAiContextSubtitle(context: AiLocationContext): String {
+fun formatAiContextSubtitle(
+    context: AiLocationContext,
+    s: AppStrings = AppLocale.current
+): String {
     return when (context) {
-        is AiLocationContext.AllProjects -> "Все проекты"
+        is AiLocationContext.AllProjects -> s.aiSubtitleAllProjects
         is AiLocationContext.ProjectFolder ->
-            context.projectName.takeIf { it.isNotBlank() }?.let { "Проект: $it" } ?: "Папка проекта"
+            context.projectName.takeIf { it.isNotBlank() }?.let { s.aiSubtitleProject(it) } ?: s.aiSubtitleProjectFolder
         is AiLocationContext.Repository -> {
             val dir = context.currentDir.trim('/')
             val repo = context.repoName.trim()
             when {
                 repo.isNotEmpty() && dir.isNotEmpty() -> "$repo/$dir"
-                repo.isNotEmpty() -> "Репозиторий: $repo"
+                repo.isNotEmpty() -> s.aiSubtitleRepo(repo)
                 dir.isNotEmpty() -> dir
-                else -> "Репозиторий"
+                else -> s.aiSubtitleRepoUnnamed
             }
         }
         is AiLocationContext.File -> {
@@ -124,7 +186,7 @@ fun formatAiContextSubtitle(context: AiLocationContext): String {
             when {
                 repo.isNotEmpty() && cleanPath.isNotEmpty() -> "$repo/$cleanPath"
                 cleanPath.isNotEmpty() -> cleanPath
-                else -> "Файл"
+                else -> s.aiSubtitleFile
             }
         }
     }

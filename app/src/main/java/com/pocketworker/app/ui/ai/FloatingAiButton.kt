@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -237,10 +238,11 @@ fun FloatingAiButtonOverlay(
     onOpenAiChat: (centerInContainerPx: Offset) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     FloatingCircleOverlay(
         state = state,
-        dockedDescription = "Выдвинуть кнопку AI",
-        undockedDescription = "Открыть чат с AI",
+        dockedDescription = s.fabRevealAiDesc,
+        undockedDescription = s.fabOpenAiDesc,
         onClick = onOpenAiChat,
         modifier = modifier
     ) { contentAlpha, pressScale, glowIntensity ->
@@ -261,10 +263,11 @@ fun FloatingFolderButtonOverlay(
     onReturnToFolders: (centerInContainerPx: Offset) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     FloatingCircleOverlay(
         state = state,
-        dockedDescription = "Выдвинуть кнопку возврата",
-        undockedDescription = "Вернуться в папки",
+        dockedDescription = s.fabRevealFoldersDesc,
+        undockedDescription = s.fabReturnToFoldersDesc,
         onClick = onReturnToFolders,
         modifier = modifier
     ) { contentAlpha, pressScale, _ ->

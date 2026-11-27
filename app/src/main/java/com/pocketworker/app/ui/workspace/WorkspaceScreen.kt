@@ -26,8 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -44,8 +42,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
 import com.pocketworker.app.ui.common.OnLifecycleResume
+import com.pocketworker.app.ui.common.TopNotificationHost
+import com.pocketworker.app.ui.common.rememberTopNotificationState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,20 +56,27 @@ fun WorkspaceScreen(
     onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val notificationState = rememberTopNotificationState()
+    val s = LocalAppStrings.current
 
-    var showCredentialsDialog by remember { mutableStateOf(false) }
-    var showAuthorDialog by remember { mutableStateOf(false) }
     var commitIdForBranch by remember { mutableStateOf<String?>(null) }
 
     OnLifecycleResume {
         viewModel.loadAll()
     }
 
+    LaunchedEffect(state.activeTab, state.project?.id, state.gitStatus?.currentBranch) {
+        if (state.activeTab == WorkspaceTab.GIT && state.project != null && state.gitStatus?.isGitRepo == true) {
+            viewModel.autoFetchCurrentBranch()
+        }
+    }
+
     LaunchedEffect(state.errorMessage, state.infoMessage) {
-        val msg = state.errorMessage ?: state.infoMessage
+        val err = state.errorMessage
+        val info = state.infoMessage
+        val msg = err ?: info
         if (msg != null) {
-            snackbarHostState.showSnackbar(msg)
+            notificationState.show(message = msg, isError = err != null)
             viewModel.clearMessages()
         }
     }
@@ -77,6 +85,7 @@ fun WorkspaceScreen(
     if (activeEditor != null) {
         FileEditorScreen(
             editorState = activeEditor,
+            notificationState = notificationState,
             onContentChange = { viewModel.updateEditorContent(it) },
             onSave = { viewModel.saveEditorFile() },
             onClose = { viewModel.closeFileEditor() },
@@ -94,13 +103,13 @@ fun WorkspaceScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBackToProjects) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К репозиториям проекта")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = s.workspaceBackToProjectRepos)
                     }
                 },
                 title = {
                     Column {
                         Text(
-                            text = state.project?.name ?: "Репозиторий",
+                            text = state.project?.name ?: s.workspaceRepoFallbackTitle,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -152,10 +161,10 @@ fun WorkspaceScreen(
                     AnimatedRefreshIconButton(
                         isRefreshing = state.isLoading || state.isBusy,
                         onClick = { viewModel.loadAll() },
-                        contentDescription = "Обновить"
+                        contentDescription = s.commonRefresh
                     )
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                        Icon(Icons.Rounded.Settings, contentDescription = s.commonSettings)
                     }
                 }
             )
@@ -166,7 +175,7 @@ fun WorkspaceScreen(
                     selected = state.activeTab == WorkspaceTab.FILES,
                     onClick = { viewModel.setActiveTab(WorkspaceTab.FILES) },
                     icon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
-                    label = { Text("Файлы") }
+                    label = { Text(s.workspaceTabFiles) }
                 )
                 NavigationBarItem(
                     selected = state.activeTab == WorkspaceTab.GIT,
@@ -178,92 +187,109 @@ fun WorkspaceScreen(
                     selected = state.activeTab == WorkspaceTab.HISTORY,
                     onClick = { viewModel.setActiveTab(WorkspaceTab.HISTORY) },
                     icon = { Icon(Icons.Rounded.History, contentDescription = null) },
-                    label = { Text("История") }
+                    label = { Text(s.workspaceTabHistory) }
                 )
             }
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (state.isBusy) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                state.busyMessage?.let { msg ->
-                    Text(
-                        text = msg,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (state.isBusy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    state.busyMessage?.let { msg ->
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                if (state.isLoading && state.project == null) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    when (state.activeTab) {
+                        WorkspaceTab.FILES -> FilesTab(
+                            state = state,
+                            onOpenDirectory = viewModel::openDirectory,
+                            onNavigateUp = { viewModel.navigateUpDirectory() },
+                            onOpenFile = viewModel::openFile,
+                            onToggleShowHiddenGit = viewModel::toggleShowHiddenGit,
+                            onSearchQueryChange = viewModel::updateFileSearch,
+                            onCreateFile = viewModel::createNewFile,
+                            onCreateFolder = viewModel::createNewDirectory,
+                            onRenameEntry = viewModel::renameFileEntry,
+                            onDeleteEntry = viewModel::deleteFileEntry,
+                            onRunSyntaxCheck = viewModel::runSyntaxCheck
+                        )
+                        WorkspaceTab.GIT -> GitControlTab(
+                            state = state,
+                            onInitGit = { viewModel.initGitInProject() },
+                            onToggleViewAsTree = viewModel::toggleViewChangesAsTree,
+                            onFetch = viewModel::fetch,
+                            onPull = viewModel::pull,
+                            onPush = { remote, force -> viewModel.push(remoteName = remote, force = force) },
+                            onSync = viewModel::syncRemote,
+                            onStageFile = viewModel::stageFile,
+                            onStageAll = viewModel::stageAll,
+                            onUnstageFile = viewModel::unstageFile,
+                            onUnstageAll = viewModel::unstageAll,
+                            onDiscardFile = viewModel::discardFileChanges,
+                            onDiscardAll = viewModel::discardAllChanges,
+                            onViewDiff = viewModel::openWorkingDiff,
+                            onCommit = viewModel::commit,
+                            onCheckoutBranch = viewModel::checkoutBranch,
+                            onCreateBranch = viewModel::createBranch,
+                            onRenameBranch = viewModel::renameBranch,
+                            onMergeBranch = viewModel::mergeBranch,
+                            onDeleteBranch = { branch -> viewModel.deleteBranch(branch) },
+                            onAddRemote = viewModel::addRemote,
+                            onUpdateRemote = viewModel::updateRemoteUrl,
+                            onRemoveRemote = viewModel::removeRemote,
+                            onCreateStash = viewModel::createStash,
+                            onApplyStash = viewModel::applyStash,
+                            onPopStash = viewModel::popStash,
+                            onDropStash = viewModel::dropStash,
+                            onClearStashes = viewModel::clearStashes,
+                            onCreateTag = viewModel::createTag,
+                            onDeleteTag = viewModel::deleteTag,
+                            onPushTags = viewModel::pushTags,
+                            onClearGitOutputLogs = viewModel::clearGitOutputLogs
+                        )
+                        WorkspaceTab.HISTORY -> HistoryTab(
+                            state = state,
+                            onSelectBranchRef = viewModel::selectHistoryBranch,
+                            onCommitClick = viewModel::openCommitDetail,
+                            onLoadMore = viewModel::loadMoreCommits
+                        )
+                    }
                 }
             }
 
-            if (state.isLoading && state.project == null) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                when (state.activeTab) {
-                    WorkspaceTab.FILES -> FilesTab(
-                        state = state,
-                        onOpenDirectory = viewModel::openDirectory,
-                        onNavigateUp = { viewModel.navigateUpDirectory() },
-                        onOpenFile = viewModel::openFile,
-                        onToggleShowHiddenGit = viewModel::toggleShowHiddenGit,
-                        onSearchQueryChange = viewModel::updateFileSearch,
-                        onCreateFile = viewModel::createNewFile,
-                        onCreateFolder = viewModel::createNewDirectory,
-                        onRenameEntry = viewModel::renameFileEntry,
-                        onDeleteEntry = viewModel::deleteFileEntry
-                    )
-                    WorkspaceTab.GIT -> GitControlTab(
-                        state = state,
-                        onInitGit = { viewModel.initGitInProject() },
-                        onToggleViewAsTree = viewModel::toggleViewChangesAsTree,
-                        onFetch = viewModel::fetch,
-                        onPull = viewModel::pull,
-                        onPush = { remote, force -> viewModel.push(remoteName = remote, force = force) },
-                        onSync = viewModel::syncRemote,
-                        onStageFile = viewModel::stageFile,
-                        onStageAll = viewModel::stageAll,
-                        onUnstageFile = viewModel::unstageFile,
-                        onUnstageAll = viewModel::unstageAll,
-                        onDiscardFile = viewModel::discardFileChanges,
-                        onDiscardAll = viewModel::discardAllChanges,
-                        onViewDiff = viewModel::openWorkingDiff,
-                        onCommit = viewModel::commit,
-                        onCheckoutBranch = viewModel::checkoutBranch,
-                        onCreateBranch = viewModel::createBranch,
-                        onRenameBranch = viewModel::renameBranch,
-                        onMergeBranch = viewModel::mergeBranch,
-                        onDeleteBranch = { branch -> viewModel.deleteBranch(branch) },
-                        onAddRemote = viewModel::addRemote,
-                        onUpdateRemote = viewModel::updateRemoteUrl,
-                        onRemoveRemote = viewModel::removeRemote,
-                        onCreateStash = viewModel::createStash,
-                        onApplyStash = viewModel::applyStash,
-                        onPopStash = viewModel::popStash,
-                        onDropStash = viewModel::dropStash,
-                        onClearStashes = viewModel::clearStashes,
-                        onCreateTag = viewModel::createTag,
-                        onDeleteTag = viewModel::deleteTag,
-                        onPushTags = viewModel::pushTags,
-                        onClearGitOutputLogs = viewModel::clearGitOutputLogs,
-                        onOpenCredentialsDialog = { showCredentialsDialog = true },
-                        onOpenAuthorDialog = { showAuthorDialog = true }
-                    )
-                    WorkspaceTab.HISTORY -> HistoryTab(
-                        state = state,
-                        onSelectBranchRef = viewModel::selectHistoryBranch,
-                        onCommitClick = viewModel::openCommitDetail,
-                        onLoadMore = viewModel::loadMoreCommits
-                    )
-                }
-            }
+            TopNotificationHost(
+                state = notificationState,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
+    }
+
+    state.syntaxCheckDialog?.let { syntaxState ->
+        SyntaxCheckResultsDialog(
+            state = syntaxState,
+            onDismiss = viewModel::closeSyntaxCheckDialog,
+            onRecheck = { viewModel.runSyntaxCheck(syntaxState.singleTargetPath) },
+            onOpenFile = { path ->
+                viewModel.closeSyntaxCheckDialog()
+                viewModel.openFile(path)
+            }
+        )
     }
 
     state.diffDialog?.let { diffState ->
@@ -292,24 +318,6 @@ fun WorkspaceScreen(
             onCreate = { name, checkout ->
                 viewModel.createBranch(name, startPoint = commitId, checkout = checkout)
             }
-        )
-    }
-
-    if (showCredentialsDialog) {
-        ProjectCredentialsDialog(
-            currentCredentials = state.repoCredentials,
-            hasDefaultCredentials = state.hasFallbackCredentials,
-            onDismiss = { showCredentialsDialog = false },
-            onSave = viewModel::saveRepoCredentials
-        )
-    }
-
-    if (showAuthorDialog && state.gitStatus != null) {
-        AuthorConfigDialog(
-            currentName = state.gitStatus!!.authorName,
-            currentEmail = state.gitStatus!!.authorEmail,
-            onDismiss = { showAuthorDialog = false },
-            onSave = viewModel::saveAuthorConfig
         )
     }
 }

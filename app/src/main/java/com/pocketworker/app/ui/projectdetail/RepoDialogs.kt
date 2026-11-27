@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.CloneProgress
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.FormFieldShape
 import com.pocketworker.app.ui.common.FormOptionCard
 import com.pocketworker.app.ui.common.PocketFormDialog
@@ -78,6 +79,7 @@ fun AddRepoChoiceSheet(
     onAddGroupClick: () -> Unit,
     onCreateClick: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -92,11 +94,11 @@ fun AddRepoChoiceSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Добавить репозиторий",
+                text = s.projectAddRepo,
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
-                text = "Репозиторий будет сохранён в папке этого проекта",
+                text = s.repoAddSheetSubtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -124,12 +126,12 @@ fun AddRepoChoiceSheet(
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
                         Text(
-                            text = "Подключить репозиторий",
+                            text = s.repoConnectTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Клонировать существующий Git-репозиторий по ссылке (HTTPS)",
+                            text = s.repoConnectSubtitle,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -159,12 +161,12 @@ fun AddRepoChoiceSheet(
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
                         Text(
-                            text = "Добавить группу",
+                            text = s.repoAddGroupTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Загрузить несколько репозиториев по ссылке GitHub или GitLab",
+                            text = s.repoAddGroupSubtitle,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -194,12 +196,12 @@ fun AddRepoChoiceSheet(
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
                         Text(
-                            text = "Создать репозиторий",
+                            text = s.repoCreateTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Создать новую пустую папку (с Git или без него)",
+                            text = s.repoCreateSubtitle,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -216,6 +218,7 @@ fun CloneRepoDialog(
     cloneProgress: CloneProgress?,
     errorMessage: String?,
     fallbackCredentials: GitCredentials?,
+    hasConnectedOAuthAccounts: Boolean = false,
     onClearError: () -> Unit,
     onDismiss: () -> Unit,
     onCancelClone: () -> Unit,
@@ -229,19 +232,20 @@ fun CloneRepoDialog(
         saveForRepo: Boolean
     ) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var url by remember { mutableStateOf("") }
     var customName by remember { mutableStateOf("") }
     var nameManuallyEdited by remember { mutableStateOf(false) }
     var branch by remember { mutableStateOf("") }
-    var useAuth by remember { mutableStateOf(fallbackCredentials != null) }
+    var useAuth by remember { mutableStateOf(fallbackCredentials != null || hasConnectedOAuthAccounts) }
     var username by remember { mutableStateOf(fallbackCredentials?.username ?: "") }
     var token by remember { mutableStateOf(fallbackCredentials?.tokenOrPassword ?: "") }
     var saveCreds by remember { mutableStateOf(true) }
     var showToken by remember { mutableStateOf(false) }
 
     PocketFormDialog(
-        title = "Подключить репозиторий",
-        subtitle = "Клонирование Git-репозитория по HTTPS",
+        title = s.repoConnectTitle,
+        subtitle = s.repoCloneDialogSubtitle,
         icon = Icons.Rounded.CloudDownload,
         onDismiss = onDismiss,
         dismissEnabled = !isCloning,
@@ -260,11 +264,11 @@ fun CloneRepoDialog(
                     shape = FormFieldShape,
                     modifier = Modifier.heightIn(min = 44.dp)
                 ) {
-                    Text("Отменить")
+                    Text(s.commonCancel)
                 }
             } else {
                 TextButton(onClick = onDismiss) {
-                    Text("Закрыть")
+                    Text(s.commonClose)
                 }
                 Button(
                     onClick = {
@@ -282,7 +286,7 @@ fun CloneRepoDialog(
                     shape = FormFieldShape,
                     modifier = Modifier.heightIn(min = 44.dp)
                 ) {
-                    Text("Клонировать")
+                    Text(s.repoCloneAction)
                 }
             }
         }
@@ -298,7 +302,7 @@ fun CloneRepoDialog(
                     }
                 }
             },
-            label = { Text("Ссылка на Git-репозиторий") },
+            label = { Text(s.repoUrlLabel) },
             placeholder = { Text("https://github.com/user/repo.git") },
             singleLine = true,
             enabled = !isCloning,
@@ -314,8 +318,8 @@ fun CloneRepoDialog(
                 nameManuallyEdited = it.isNotBlank()
                 onClearError()
             },
-            label = { Text("Имя папки / репозитория") },
-            placeholder = { Text("Автоматически из ссылки") },
+            label = { Text(s.repoFolderNameLabel) },
+            placeholder = { Text(s.repoFolderNamePlaceholder) },
             singleLine = true,
             enabled = !isCloning,
             shape = FormFieldShape,
@@ -329,8 +333,8 @@ fun CloneRepoDialog(
                 branch = it
                 onClearError()
             },
-            label = { Text("Ветка (необязательно)") },
-            placeholder = { Text("По умолчанию (HEAD)") },
+            label = { Text(s.repoBranchOptionalLabel) },
+            placeholder = { Text(s.repoBranchOptionalPlaceholder) },
             singleLine = true,
             enabled = !isCloning,
             shape = FormFieldShape,
@@ -358,8 +362,9 @@ fun CloneRepoDialog(
             onToggleShowToken = { showToken = !showToken },
             saveCreds = saveCreds,
             onSaveCredsChange = { saveCreds = it },
-            saveCredsLabel = "Сохранить токен для этого репозитория",
-            enabled = !isCloning
+            saveCredsLabel = s.repoSaveTokenForRepo,
+            enabled = !isCloning,
+            hasConnectedOAuthAccounts = hasConnectedOAuthAccounts
         )
 
         if (isCloning && cloneProgress != null) {
@@ -384,6 +389,7 @@ fun CreateRepoDialog(
         authorEmail: String
     ) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf("") }
     var initGit by remember { mutableStateOf(true) }
     var initialBranch by remember { mutableStateOf("main") }
@@ -393,8 +399,8 @@ fun CreateRepoDialog(
     var authorEmail by remember { mutableStateOf(GitEngine.DEFAULT_AUTHOR_EMAIL) }
 
     PocketFormDialog(
-        title = "Создать репозиторий",
-        subtitle = "Новая локальная папка внутри проекта",
+        title = s.repoCreateTitle,
+        subtitle = s.repoCreateDialogSubtitle,
         icon = Icons.Rounded.AddCircleOutline,
         onDismiss = onDismiss,
         dismissEnabled = !isCreating,
@@ -408,7 +414,7 @@ fun CreateRepoDialog(
         } else null,
         footerActions = {
             TextButton(onClick = onDismiss, enabled = !isCreating) {
-                Text("Отмена")
+                Text(s.commonCancel)
             }
             Button(
                 onClick = {
@@ -426,7 +432,7 @@ fun CreateRepoDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Создать")
+                Text(s.commonCreate)
             }
         }
     ) {
@@ -436,7 +442,7 @@ fun CreateRepoDialog(
                 name = it
                 onClearError()
             },
-            label = { Text("Имя репозитория (папки)") },
+            label = { Text(s.repoNameLabel) },
             placeholder = { Text("backend-api") },
             singleLine = true,
             enabled = !isCreating,
@@ -455,12 +461,12 @@ fun CreateRepoDialog(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Инициализировать Git",
+                        text = s.repoInitGitTitle,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "Создать локальный Git-репозиторий сразу",
+                        text = s.repoInitGitSubtitle,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -486,12 +492,12 @@ fun CreateRepoDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "README.md и первый коммит",
+                            text = s.repoCreateReadmeTitle,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Сразу подготовить стартовую ветку",
+                            text = s.repoCreateReadmeSubtitle,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -511,7 +517,7 @@ fun CreateRepoDialog(
             OutlinedTextField(
                 value = initialBranch,
                 onValueChange = { initialBranch = it },
-                label = { Text("Начальная ветка") },
+                label = { Text(s.repoInitialBranchLabel) },
                 singleLine = true,
                 enabled = !isCreating,
                 shape = FormFieldShape,
@@ -532,7 +538,7 @@ fun CreateRepoDialog(
             OutlinedTextField(
                 value = remoteUrl,
                 onValueChange = { remoteUrl = it },
-                label = { Text("URL удалённого Git (необязательно)") },
+                label = { Text(s.repoRemoteUrlOptionalLabel) },
                 placeholder = { Text("https://github.com/user/repo.git") },
                 singleLine = true,
                 enabled = !isCreating,
@@ -544,7 +550,7 @@ fun CreateRepoDialog(
             OutlinedTextField(
                 value = authorName,
                 onValueChange = { authorName = it },
-                label = { Text("Имя автора (user.name)") },
+                label = { Text(s.repoAuthorNameLabel) },
                 singleLine = true,
                 enabled = !isCreating,
                 shape = FormFieldShape,
@@ -555,7 +561,7 @@ fun CreateRepoDialog(
             OutlinedTextField(
                 value = authorEmail,
                 onValueChange = { authorEmail = it },
-                label = { Text("Email автора (user.email)") },
+                label = { Text(s.repoAuthorEmailLabel) },
                 singleLine = true,
                 enabled = !isCreating,
                 shape = FormFieldShape,
@@ -575,6 +581,7 @@ private fun DialogErrorBanner(
     message: String,
     onDismissError: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         shape = MaterialTheme.shapes.small,
@@ -607,7 +614,7 @@ private fun DialogErrorBanner(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Скрыть ошибку",
+                    contentDescription = s.commonHideError,
                     tint = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.size(16.dp)
                 )
@@ -629,8 +636,10 @@ private fun AuthCredentialsFields(
     saveCreds: Boolean,
     onSaveCredsChange: (Boolean) -> Unit,
     saveCredsLabel: String,
-    enabled: Boolean
+    enabled: Boolean,
+    hasConnectedOAuthAccounts: Boolean = false
 ) {
+    val s = LocalAppStrings.current
     FormOptionCard {
         Row(
             modifier = Modifier
@@ -641,12 +650,12 @@ private fun AuthCredentialsFields(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Авторизация (PAT / пароль)",
+                    text = s.repoAuthTitle,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "Для приватных репозиториев и групп",
+                    text = s.repoAuthSubtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -663,10 +672,18 @@ private fun AuthCredentialsFields(
         if (useAuth) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
 
+            if (hasConnectedOAuthAccounts && token.isBlank()) {
+                Text(
+                    text = s.oauthCloneUsingConnectedAccountsHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
             OutlinedTextField(
                 value = username,
                 onValueChange = onUsernameChange,
-                label = { Text("Пользователь (или пусто для GitHub)") },
+                label = { Text(s.repoAuthUserLabel) },
                 placeholder = { Text("x-access-token") },
                 singleLine = true,
                 enabled = enabled,
@@ -678,7 +695,7 @@ private fun AuthCredentialsFields(
             OutlinedTextField(
                 value = token,
                 onValueChange = onTokenChange,
-                label = { Text("Personal Access Token / Пароль") },
+                label = { Text(s.repoAuthTokenLabel) },
                 singleLine = true,
                 enabled = enabled,
                 shape = FormFieldShape,
@@ -692,7 +709,7 @@ private fun AuthCredentialsFields(
                     IconButton(onClick = onToggleShowToken) {
                         Icon(
                             imageVector = if (showToken) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                            contentDescription = "Показать/скрыть токен"
+                            contentDescription = s.commonShowHideToken
                         )
                     }
                 },
@@ -744,6 +761,7 @@ private fun CloneProgressBlock(cloneProgress: CloneProgress) {
 fun AddGroupSheet(
     state: ProjectDetailUiState,
     fallbackCredentials: GitCredentials?,
+    hasConnectedOAuthAccounts: Boolean = false,
     onClearError: () -> Unit,
     onDiscover: (url: String, useAuth: Boolean, username: String, token: String) -> Unit,
     onToggleRepo: (repoId: String) -> Unit,
@@ -752,9 +770,10 @@ fun AddGroupSheet(
     onCancelClone: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var url by remember { mutableStateOf("") }
-    var useAuth by remember { mutableStateOf(fallbackCredentials != null) }
+    var useAuth by remember { mutableStateOf(fallbackCredentials != null || hasConnectedOAuthAccounts) }
     var username by remember { mutableStateOf(fallbackCredentials?.username ?: "") }
     var token by remember { mutableStateOf(fallbackCredentials?.tokenOrPassword ?: "") }
     var saveCreds by remember { mutableStateOf(true) }
@@ -797,19 +816,19 @@ fun AddGroupSheet(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Добавить группу",
+                        text = s.repoAddGroupTitle,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Массовое клонирование из GitHub / GitLab",
+                        text = s.repoGroupDialogSubtitle,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (!state.isGroupCloning) {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Закрыть")
+                        Icon(Icons.Rounded.Close, contentDescription = s.commonClose)
                     }
                 }
             }
@@ -827,8 +846,8 @@ fun AddGroupSheet(
                     url = it
                     onClearError()
                 },
-                label = { Text("Ссылка на группу GitLab или GitHub") },
-                placeholder = { Text("https://gitlab.com/group или https://github.com/org") },
+                label = { Text(s.repoGroupUrlLabel) },
+                placeholder = { Text(s.repoGroupUrlPlaceholder) },
                 singleLine = true,
                 enabled = !isBusy,
                 shape = FormFieldShape,
@@ -856,8 +875,9 @@ fun AddGroupSheet(
                 onToggleShowToken = { showToken = !showToken },
                 saveCreds = saveCreds,
                 onSaveCredsChange = { saveCreds = it },
-                saveCredsLabel = "Сохранять токен для скачанных репозиториев",
-                enabled = !isBusy
+                saveCredsLabel = s.repoGroupSaveTokenLabel,
+                enabled = !isBusy,
+                hasConnectedOAuthAccounts = hasConnectedOAuthAccounts
             )
 
             OutlinedButton(
@@ -868,13 +888,13 @@ fun AddGroupSheet(
                 Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    if (state.discoveredRepos.isEmpty()) "Найти репозитории" else "Обновить список"
+                    if (state.discoveredRepos.isEmpty()) s.repoGroupFindRepos else s.repoGroupRefreshList
                 )
             }
 
             if (state.isDiscoveringGroup) {
                 Text(
-                    text = "Поиск репозиториев по ссылке...",
+                    text = s.repoGroupSearching,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -890,7 +910,7 @@ fun AddGroupSheet(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Найдено: ${state.discoveredRepos.size} • Выбрано: $selectedCount",
+                        text = s.repoGroupFoundSelected(state.discoveredRepos.size, selectedCount),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -898,7 +918,7 @@ fun AddGroupSheet(
                         onClick = { onSetAllSelected(!allSelected) },
                         enabled = !state.isGroupCloning
                     ) {
-                        Text(if (allSelected) "Снять все" else "Выбрать все")
+                        Text(if (allSelected) s.repoGroupUnselectAll else s.repoGroupSelectAll)
                     }
                 }
 
@@ -950,7 +970,7 @@ fun AddGroupSheet(
                                         if (item.repo.isPrivate) {
                                             Icon(
                                                 imageVector = Icons.Rounded.Lock,
-                                                contentDescription = "Приватный",
+                                                contentDescription = s.repoGroupPrivateDesc,
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.size(14.dp)
                                             )
@@ -961,7 +981,7 @@ fun AddGroupSheet(
                                                 shape = RoundedCornerShape(6.dp)
                                             ) {
                                                 Text(
-                                                    text = "Уже добавлен",
+                                                    text = s.repoGroupAlreadyAdded,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1000,7 +1020,11 @@ fun AddGroupSheet(
                 Box(modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Скачивание ${state.groupCloneCurrentIndex} из ${state.groupCloneTotal}: ${state.groupCloneCurrentRepoName}",
+                            text = s.repoGroupDownloading(
+                                state.groupCloneCurrentIndex,
+                                state.groupCloneTotal,
+                                state.groupCloneCurrentRepoName
+                            ),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary
@@ -1012,7 +1036,7 @@ fun AddGroupSheet(
                     onClick = onCancelClone,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Отменить")
+                    Text(s.commonCancel)
                 }
             } else if (state.discoveredRepos.isNotEmpty()) {
                 Button(
@@ -1027,7 +1051,7 @@ fun AddGroupSheet(
                     enabled = selectedCount > 0,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Скачать выбранные ($selectedCount)")
+                    Text(s.repoGroupDownloadSelected(selectedCount))
                 }
             }
         }

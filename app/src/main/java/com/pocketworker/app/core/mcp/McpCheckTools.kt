@@ -2,6 +2,7 @@ package com.pocketworker.app.core.mcp
 
 import com.pocketworker.app.core.git.FileReadResult
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.ProjectFileManager
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.ui.workspace.CodeLanguage
@@ -28,9 +29,10 @@ internal fun createCheckTools(
     gitEngine: GitEngine,
     credentialStore: CredentialStore,
     resolver: McpWorkspaceResolver,
-    syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine
+    syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine,
+    oauthManager: GitOAuthManager? = null
 ): List<McpTool> = listOf(
-    CheckPushReadinessTool(fileManager, gitEngine, credentialStore, resolver),
+    CheckPushReadinessTool(fileManager, gitEngine, credentialStore, resolver, oauthManager),
     CheckMergeConflictsTool(fileManager, gitEngine, resolver),
     CheckFileSyntaxTool(fileManager, gitEngine, resolver, syntaxCheckEngine)
 )
@@ -58,7 +60,8 @@ private class CheckPushReadinessTool(
     private val fileManager: ProjectFileManager,
     private val gitEngine: GitEngine,
     private val credentialStore: CredentialStore,
-    private val resolver: McpWorkspaceResolver
+    private val resolver: McpWorkspaceResolver,
+    private val oauthManager: GitOAuthManager? = null
 ) : McpTool {
 
     override val definition = McpToolDefinition(
@@ -100,16 +103,22 @@ private class CheckPushReadinessTool(
         val warnings = mutableListOf<JSONObject>()
         val nextSteps = mutableListOf<String>()
 
+        val remotes = gitEngine.getRemotes(resolved.dir)
+        val targetRemote = remotes.firstOrNull { it.name == remoteName }
+        val targetRemoteUrl = targetRemote?.pushUrl ?: resolved.repo.remoteUrl
+
         val credentialScope = when {
-            credentialStore.getRepoCredentials(repoId) != null -> "repo"
-            credentialStore.getProjectCredentials(projectId) != null -> "project"
+            credentialStore.getRepoOAuthAccountId(repoId) != null ||
+                credentialStore.getRepoCredentials(repoId) != null -> "repo"
+            credentialStore.getProjectOAuthAccountId(projectId) != null ||
+                credentialStore.getProjectCredentials(projectId) != null -> "project"
+            credentialStore.resolveOAuthAccountForRepo(projectId, repoId, targetRemoteUrl) != null -> "oauth"
             credentialStore.getDefaultCredentials() != null -> "default"
             else -> "none"
         }
-        val creds = credentialStore.resolveForRepo(projectId, repoId)
+        val creds = oauthManager?.resolveFreshCredentials(projectId, repoId, targetRemoteUrl)
+            ?: credentialStore.resolveForRepo(projectId, repoId, targetRemoteUrl)
 
-        val remotes = gitEngine.getRemotes(resolved.dir)
-        val targetRemote = remotes.firstOrNull { it.name == remoteName }
         if (targetRemote == null) {
             blockers.add(issue(McpErrorCodes.REMOTE_NOT_FOUND, "Удалённый репозиторий '$remoteName' не настроен."))
             nextSteps.add("Добавь remote через git remote add $remoteName <https-url>")
@@ -479,161 +488,19 @@ private class CheckMergeConflictsTool(
 
 // region check_file_syntax
 
-private data class SyntaxValidationOutcome(
+data class SyntaxValidationOutcome(
     val engine: String,
     val issues: List<SyntaxIssue>
 )
 
-private class CheckFileSyntaxTool(
-    private val fileManager: ProjectFileManager,
-    private val gitEngine: GitEngine,
-    private val resolver: McpWorkspaceResolver,
+class FileSyntaxValidator(
     private val syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine
-) : McpTool {
+) {
 
-    override val definition = McpToolDefinition(
-        name = "check_file_syntax",
-        description = "Оффлайн AST-проверка синтаксиса файлов прямо на устройстве: полноценный парсинг PHP 8.x, JS/JSX/TS/TSX, Python, C/C++/C#, Java, Kotlin, Go, Rust, Bash, SQL, HTML, CSS, YAML, TOML, JSON и XML/SVG, плюс проверка отсутствия маркеров Git-конфликтов (с fallback на баланс скобок/кавычек для прочих форматов).",
-        inputSchema = McpSchemaBuilder.objectSchema(
-            required = listOf("projectId", "repoId"),
-            properties = {
-                put("projectId", McpSchemaBuilder.stringProp("ID проекта"))
-                put("repoId", McpSchemaBuilder.stringProp("ID репозитория"))
-                put("path", McpSchemaBuilder.stringProp("Путь к одному файлу для проверки"))
-                put(
-                    "paths",
-                    McpSchemaBuilder.arrayProp(
-                        "Список путей для пакетной проверки (если ни path, ни paths не заданы — проверяются все изменённые файлы в Git status)",
-                        McpSchemaBuilder.stringProp("Относительный путь к файлу")
-                    )
-                )
-            }
-        ),
-        defaultTier = McpPermissionTier.AUTO
-    )
-
-    override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
-        val projectId = arguments.requireNonBlankString("projectId")
-        val repoId = arguments.requireNonBlankString("repoId")
-        val (resolved, err) = resolver.resolveRepo(projectId, repoId)
-        if (err != null || resolved == null) return err!!
-
-        val targetPaths = linkedSetOf<String>()
-        arguments.optNonBlankString("path")?.let { targetPaths.add(it.trimStart('/')) }
-        arguments.optJSONArray("paths")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val p = arr.optString(i, "").trim().trimStart('/')
-                if (p.isNotEmpty()) targetPaths.add(p)
-            }
-        }
-        if (targetPaths.isEmpty()) {
-            val status = gitEngine.getStatus(resolved.dir)
-            (status.stagedChanges + status.unstagedChanges)
-                .filter { it.changeType.name != "DELETED" }
-                .take(30)
-                .forEach { targetPaths.add(it.path) }
-        }
-
-        val reports = JSONArray()
-        var totalErrors = 0
-        var totalWarnings = 0
-
-        for (relPath in targetPaths) {
-            val file = runCatching { fileManager.resolveSafe(resolved.dir, relPath) }.getOrNull()
-            if (file == null) {
-                reports.put(
-                    JSONObject().apply {
-                        put("path", relPath)
-                        put("valid", false)
-                        put("error", "Путь выходит за пределы репозитория")
-                    }
-                )
-                totalErrors++
-                continue
-            }
-            if (!file.exists() || !file.isFile) {
-                reports.put(
-                    JSONObject().apply {
-                        put("path", relPath)
-                        put("valid", false)
-                        put("error", "Файл не найден")
-                    }
-                )
-                totalErrors++
-                continue
-            }
-
-            val read = fileManager.readTextFile(resolved.dir, relPath, maxBytes = 2 * 1024 * 1024)
-            when (read) {
-                is FileReadResult.Binary -> reports.put(
-                    JSONObject().apply {
-                        put("path", relPath)
-                        put("valid", true)
-                        put("skipped", true)
-                        put("reason", "Бинарный файл")
-                    }
-                )
-                is FileReadResult.TooLarge -> reports.put(
-                    JSONObject().apply {
-                        put("path", relPath)
-                        put("valid", true)
-                        put("skipped", true)
-                        put("reason", "Файл превышает лимит 2 МБ")
-                    }
-                )
-                is FileReadResult.Text -> {
-                    val lang = CodeSyntaxHighlighter.detectLanguage(relPath)
-                    val outcome = validateContent(relPath, read.content, lang)
-                    val issues = outcome.issues
-                    val lines = read.content.split('\n').map { it.removeSuffix("\r") }
-                    val errCount = issues.count { it.severity == "error" }
-                    val warnCount = issues.count { it.severity == "warning" }
-                    totalErrors += errCount
-                    totalWarnings += warnCount
-
-                    val issuesArr = JSONArray()
-                    issues.take(50).forEach { iss ->
-                        issuesArr.put(
-                            JSONObject().apply {
-                                put("line", iss.line)
-                                put("column", iss.column)
-                                iss.endLine?.let { put("endLine", it) }
-                                iss.endColumn?.let { put("endColumn", it) }
-                                put("severity", iss.severity)
-                                iss.code?.let { put("code", it) }
-                                put("message", iss.message)
-                                buildLineSnippet(lines, iss.line, iss.column)?.let { put("snippet", it) }
-                            }
-                        )
-                    }
-                    reports.put(
-                        JSONObject().apply {
-                            put("path", relPath)
-                            put("language", lang.name.lowercase())
-                            put("engine", outcome.engine)
-                            put("valid", errCount == 0)
-                            put("errorCount", errCount)
-                            put("warningCount", warnCount)
-                            put("issues", issuesArr)
-                        }
-                    )
-                }
-            }
-        }
-
-        return McpToolResult.success {
-            put("allValid", totalErrors == 0)
-            put("checkedCount", reports.length())
-            put("totalErrors", totalErrors)
-            put("totalWarnings", totalWarnings)
-            put("files", reports)
-        }
-    }
-
-    private suspend fun validateContent(
+    suspend fun validate(
         relPath: String,
         content: String,
-        language: CodeLanguage
+        language: CodeLanguage = CodeSyntaxHighlighter.detectLanguage(relPath)
     ): SyntaxValidationOutcome {
         val issues = mutableListOf<SyntaxIssue>()
 
@@ -689,7 +556,7 @@ private class CheckFileSyntaxTool(
         return SyntaxValidationOutcome(fallbackEngine, issues)
     }
 
-    private fun buildLineSnippet(lines: List<String>, lineNumber: Int, column: Int): String? {
+    fun buildLineSnippet(lines: List<String>, lineNumber: Int, column: Int): String? {
         val idx = lineNumber - 1
         if (idx !in lines.indices) return null
         val rawLine = lines[idx]
@@ -1071,6 +938,155 @@ private class CheckFileSyntaxTool(
     private fun stripInlineHashComment(s: String): String {
         val idx = s.indexOf('#')
         return if (idx >= 0) s.substring(0, idx) else s
+    }
+}
+
+private class CheckFileSyntaxTool(
+    private val fileManager: ProjectFileManager,
+    private val gitEngine: GitEngine,
+    private val resolver: McpWorkspaceResolver,
+    syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine
+) : McpTool {
+
+    private val validator = FileSyntaxValidator(syntaxCheckEngine)
+
+    override val definition = McpToolDefinition(
+        name = "check_file_syntax",
+        description = "Оффлайн AST-проверка синтаксиса файлов прямо на устройстве: полноценный парсинг PHP 8.x, JS/JSX/TS/TSX, Python, C/C++/C#, Java, Kotlin, Go, Rust, Bash, SQL, HTML, CSS, YAML, TOML, JSON и XML/SVG, плюс проверка отсутствия маркеров Git-конфликтов (с fallback на баланс скобок/кавычек для прочих форматов).",
+        inputSchema = McpSchemaBuilder.objectSchema(
+            required = listOf("projectId", "repoId"),
+            properties = {
+                put("projectId", McpSchemaBuilder.stringProp("ID проекта"))
+                put("repoId", McpSchemaBuilder.stringProp("ID репозитория"))
+                put("path", McpSchemaBuilder.stringProp("Путь к одному файлу для проверки"))
+                put(
+                    "paths",
+                    McpSchemaBuilder.arrayProp(
+                        "Список путей для пакетной проверки (если ни path, ни paths не заданы — проверяются все изменённые файлы в Git status)",
+                        McpSchemaBuilder.stringProp("Относительный путь к файлу")
+                    )
+                )
+            }
+        ),
+        defaultTier = McpPermissionTier.AUTO
+    )
+
+    override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
+        val projectId = arguments.requireNonBlankString("projectId")
+        val repoId = arguments.requireNonBlankString("repoId")
+        val (resolved, err) = resolver.resolveRepo(projectId, repoId)
+        if (err != null || resolved == null) return err!!
+
+        val targetPaths = linkedSetOf<String>()
+        arguments.optNonBlankString("path")?.let { targetPaths.add(it.trimStart('/')) }
+        arguments.optJSONArray("paths")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val p = arr.optString(i, "").trim().trimStart('/')
+                if (p.isNotEmpty()) targetPaths.add(p)
+            }
+        }
+        if (targetPaths.isEmpty()) {
+            val status = gitEngine.getStatus(resolved.dir)
+            (status.stagedChanges + status.unstagedChanges)
+                .filter { it.changeType.name != "DELETED" }
+                .take(30)
+                .forEach { targetPaths.add(it.path) }
+        }
+
+        val reports = JSONArray()
+        var totalErrors = 0
+        var totalWarnings = 0
+
+        for (relPath in targetPaths) {
+            val file = runCatching { fileManager.resolveSafe(resolved.dir, relPath) }.getOrNull()
+            if (file == null) {
+                reports.put(
+                    JSONObject().apply {
+                        put("path", relPath)
+                        put("valid", false)
+                        put("error", "Путь выходит за пределы репозитория")
+                    }
+                )
+                totalErrors++
+                continue
+            }
+            if (!file.exists() || !file.isFile) {
+                reports.put(
+                    JSONObject().apply {
+                        put("path", relPath)
+                        put("valid", false)
+                        put("error", "Файл не найден")
+                    }
+                )
+                totalErrors++
+                continue
+            }
+
+            val read = fileManager.readTextFile(resolved.dir, relPath, maxBytes = 2 * 1024 * 1024)
+            when (read) {
+                is FileReadResult.Binary -> reports.put(
+                    JSONObject().apply {
+                        put("path", relPath)
+                        put("valid", true)
+                        put("skipped", true)
+                        put("reason", "Бинарный файл")
+                    }
+                )
+                is FileReadResult.TooLarge -> reports.put(
+                    JSONObject().apply {
+                        put("path", relPath)
+                        put("valid", true)
+                        put("skipped", true)
+                        put("reason", "Файл превышает лимит 2 МБ")
+                    }
+                )
+                is FileReadResult.Text -> {
+                    val lang = CodeSyntaxHighlighter.detectLanguage(relPath)
+                    val outcome = validator.validate(relPath, read.content, lang)
+                    val issues = outcome.issues
+                    val lines = read.content.split('\n').map { it.removeSuffix("\r") }
+                    val errCount = issues.count { it.severity == "error" }
+                    val warnCount = issues.count { it.severity == "warning" }
+                    totalErrors += errCount
+                    totalWarnings += warnCount
+
+                    val issuesArr = JSONArray()
+                    issues.take(50).forEach { iss ->
+                        issuesArr.put(
+                            JSONObject().apply {
+                                put("line", iss.line)
+                                put("column", iss.column)
+                                iss.endLine?.let { put("endLine", it) }
+                                iss.endColumn?.let { put("endColumn", it) }
+                                put("severity", iss.severity)
+                                iss.code?.let { put("code", it) }
+                                put("message", iss.message)
+                                validator.buildLineSnippet(lines, iss.line, iss.column)?.let { put("snippet", it) }
+                            }
+                        )
+                    }
+                    reports.put(
+                        JSONObject().apply {
+                            put("path", relPath)
+                            put("language", lang.name.lowercase())
+                            put("engine", outcome.engine)
+                            put("valid", errCount == 0)
+                            put("errorCount", errCount)
+                            put("warningCount", warnCount)
+                            put("issues", issuesArr)
+                        }
+                    )
+                }
+            }
+        }
+
+        return McpToolResult.success {
+            put("allValid", totalErrors == 0)
+            put("checkedCount", reports.length())
+            put("totalErrors", totalErrors)
+            put("totalWarnings", totalWarnings)
+            put("files", reports)
+        }
     }
 }
 

@@ -9,8 +9,18 @@ import com.pocketworker.app.core.ai.ProxyParseResult
 import com.pocketworker.app.core.ai.parseAiProxyUrl
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthAccount
+import com.pocketworker.app.core.git.GitOAuthDefaults
+import com.pocketworker.app.core.git.GitOAuthFlowState
+import com.pocketworker.app.core.git.GitOAuthManager
+import com.pocketworker.app.core.git.GitOAuthProvider
 import com.pocketworker.app.core.git.JGitEngine
 import com.pocketworker.app.core.git.RepoEntry
+import com.pocketworker.app.core.git.extractHostFromGitUrl
+import com.pocketworker.app.core.git.normalizeGitBaseUrl
+import com.pocketworker.app.core.i18n.AppLanguage
+import com.pocketworker.app.core.i18n.AppLocale
+import com.pocketworker.app.core.i18n.AppStrings
 import com.pocketworker.app.core.storage.AiAgentSettings
 import com.pocketworker.app.core.storage.AiProvider
 import com.pocketworker.app.core.storage.AppPreferences
@@ -32,9 +42,20 @@ import org.eclipse.jgit.util.FS
 import org.eclipse.jgit.util.SystemReader
 import java.io.File
 
-enum class SettingsTab(val title: String) {
-    GENERAL("Общие"),
-    AGENT("Агент")
+enum class SettingsTab {
+    GENERAL,
+    AGENT;
+
+    fun localizedTitle(s: AppStrings): String = when (this) {
+        GENERAL -> s.settingsTabGeneral
+        AGENT -> s.settingsTabAgent
+    }
+}
+
+enum class OAuthAutoBindScope {
+    NONE,
+    PROJECT,
+    REPO
 }
 
 data class SettingsUiState(
@@ -44,14 +65,23 @@ data class SettingsUiState(
     val repoId: String? = null,
     val repoEntry: RepoEntry? = null,
     val isGitRepo: Boolean = false,
+    val oauthAccounts: List<GitOAuthAccount> = emptyList(),
+    val defaultOAuthAccountIdsByHost: Map<String, String> = emptyMap(),
+    val oauthFlowState: GitOAuthFlowState = GitOAuthFlowState.Idle,
+    val lastOAuthCompletedEventId: Long = 0L,
+    val githubClientId: String = "",
+    val gitlabCloudClientId: String = "",
     val repoCredentials: GitCredentials? = null,
+    val repoOAuthAccount: GitOAuthAccount? = null,
     val repoHasCustomAuthor: Boolean = false,
     val repoAuthorName: String = GitEngine.DEFAULT_AUTHOR_NAME,
     val repoAuthorEmail: String = GitEngine.DEFAULT_AUTHOR_EMAIL,
     val projectCredentials: GitCredentials? = null,
+    val projectOAuthAccount: GitOAuthAccount? = null,
     val projectAuthorName: String? = null,
     val projectAuthorEmail: String? = null,
     val defaultCredentials: GitCredentials? = null,
+    val hasCustomGlobalAuthor: Boolean = false,
     val globalAuthorName: String = GitEngine.DEFAULT_AUTHOR_NAME,
     val globalAuthorEmail: String = GitEngine.DEFAULT_AUTHOR_EMAIL,
     val aiApiKeys: Map<AiProvider, String> = emptyMap(),
@@ -69,18 +99,26 @@ class SettingsViewModel(
     private val gitEngine: GitEngine = JGitEngine(),
     private val localModelManager: LocalModelManager? = null,
     private val onLocalProviderDeselected: () -> Unit = {},
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val oauthManager: GitOAuthManager? = null
 ) : ViewModel() {
 
     private val localState = MutableStateFlow(SettingsUiState(projectId = projectId, repoId = repoId))
     private val emptyLocalModelsFlow = MutableStateFlow<Map<String, LocalModelDownloadState>>(emptyMap())
+    private val idleOAuthFlow = MutableStateFlow<GitOAuthFlowState>(GitOAuthFlowState.Idle)
+    private var pendingAutoBindScope: OAuthAutoBindScope = OAuthAutoBindScope.NONE
 
     val uiState: StateFlow<SettingsUiState> = combine(
         preferencesStore.preferences,
         localState,
-        localModelManager?.states ?: emptyLocalModelsFlow
-    ) { prefs, local, modelStates ->
-        local.copy(preferences = prefs, localModelStates = modelStates)
+        localModelManager?.states ?: emptyLocalModelsFlow,
+        oauthManager?.flowState ?: idleOAuthFlow
+    ) { prefs, local, modelStates, oauthFlow ->
+        local.copy(
+            preferences = prefs,
+            localModelStates = modelStates,
+            oauthFlowState = oauthFlow
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
@@ -88,12 +126,57 @@ class SettingsViewModel(
             preferences = preferencesStore.preferences.value,
             projectId = projectId,
             repoId = repoId,
-            localModelStates = localModelManager?.states?.value.orEmpty()
+            localModelStates = localModelManager?.states?.value.orEmpty(),
+            oauthFlowState = oauthManager?.flowState?.value ?: GitOAuthFlowState.Idle
         )
     )
 
     init {
         loadData()
+        observeOAuthEvents()
+    }
+
+    private fun observeOAuthEvents() {
+        val manager = oauthManager ?: return
+        viewModelScope.launch {
+            manager.accountsVersion.collect { version ->
+                if (version > 0L) {
+                    loadData()
+                }
+            }
+        }
+        viewModelScope.launch {
+            manager.flowState.collect { state ->
+                if (state is GitOAuthFlowState.Completed) {
+                    val scope = pendingAutoBindScope
+                    pendingAutoBindScope = OAuthAutoBindScope.NONE
+                    withContext(ioDispatcher) {
+                        when (scope) {
+                            OAuthAutoBindScope.PROJECT ->
+                                projectId?.let { credentialStore.setProjectOAuthAccountId(it, state.account.id) }
+                            OAuthAutoBindScope.REPO ->
+                                repoId?.let { credentialStore.setRepoOAuthAccountId(it, state.account.id) }
+                            OAuthAutoBindScope.NONE -> Unit
+                        }
+                    }
+                    val s = AppLocale.current
+                    val label = state.account.shortLabel()
+                    val msg = if (state.autoFilledAuthor) {
+                        s.oauthSignedInWithAuthorInfo(label)
+                    } else {
+                        s.oauthSignedInInfo(label)
+                    }
+                    localState.update {
+                        it.copy(
+                            infoMessage = msg,
+                            lastOAuthCompletedEventId = it.lastOAuthCompletedEventId + 1L
+                        )
+                    }
+                    loadData()
+                    manager.resetFlow()
+                }
+            }
+        }
     }
 
     fun loadData() {
@@ -113,12 +196,30 @@ class SettingsViewModel(
                 } else {
                     GitEngine.DEFAULT_AUTHOR_NAME to GitEngine.DEFAULT_AUTHOR_EMAIL
                 }
+                val oauthAccounts = credentialStore.getOAuthAccounts()
+                val hostDefaults = credentialStore.getDefaultOAuthAccountIdsByHost()
+                val repoOAuthAccount = repoId?.let { id ->
+                    credentialStore.getRepoOAuthAccountId(id)?.let { accId ->
+                        oauthAccounts.firstOrNull { it.id == accId }
+                    }
+                }
+                val projectOAuthAccount = projectId?.let { id ->
+                    credentialStore.getProjectOAuthAccountId(id)?.let { accId ->
+                        oauthAccounts.firstOrNull { it.id == accId }
+                    }
+                }
+                val githubClientId = oauthManager?.effectiveClientId(GitOAuthProvider.GITHUB)
+                    ?: credentialStore.getOAuthClientId(GitOAuthProvider.GITHUB)
+                    ?: GitOAuthDefaults.buildConfigClientId(GitOAuthProvider.GITHUB)
+                val gitlabCloudClientId = oauthManager?.effectiveClientId(GitOAuthProvider.GITLAB)
+                    ?: credentialStore.getOAuthClientId(GitOAuthProvider.GITLAB)
+                    ?: GitOAuthDefaults.buildConfigClientId(GitOAuthProvider.GITLAB)
                 val repoCreds = repoId?.let { credentialStore.getRepoCredentials(it) }
                 val projectCreds = projectId?.let { credentialStore.getProjectCredentials(it) }
                 val defaultCreds = credentialStore.getDefaultCredentials()
                 val aiApiKeys = credentialStore.getAllAiApiKeys()
                 val aiProxyUrl = credentialStore.getAiProxyUrl().orEmpty()
-                val (authorName, authorEmail) = readGlobalAuthor()
+                val (authorName, authorEmail, hasCustomGlobalAuthor) = readGlobalAuthor()
 
                 SettingsUiState(
                     projectId = projectId,
@@ -126,14 +227,21 @@ class SettingsViewModel(
                     repoId = repoId,
                     repoEntry = repoEntry,
                     isGitRepo = isGitRepo,
+                    oauthAccounts = oauthAccounts,
+                    defaultOAuthAccountIdsByHost = hostDefaults,
+                    githubClientId = githubClientId,
+                    gitlabCloudClientId = gitlabCloudClientId,
                     repoCredentials = repoCreds,
+                    repoOAuthAccount = repoOAuthAccount,
                     repoHasCustomAuthor = localRepoAuthor != null,
                     repoAuthorName = repoAuthorName,
                     repoAuthorEmail = repoAuthorEmail,
                     projectCredentials = projectCreds,
+                    projectOAuthAccount = projectOAuthAccount,
                     projectAuthorName = project?.authorName,
                     projectAuthorEmail = project?.authorEmail,
                     defaultCredentials = defaultCreds,
+                    hasCustomGlobalAuthor = hasCustomGlobalAuthor,
                     globalAuthorName = authorName,
                     globalAuthorEmail = authorEmail,
                     aiApiKeys = aiApiKeys,
@@ -141,13 +249,21 @@ class SettingsViewModel(
                 )
             }
             localState.update { current ->
-                loaded.copy(infoMessage = current.infoMessage)
+                loaded.copy(
+                    infoMessage = current.infoMessage,
+                    lastOAuthCompletedEventId = current.lastOAuthCompletedEventId
+                )
             }
         }
     }
 
     fun setThemeMode(mode: AppThemeMode) {
         preferencesStore.setThemeMode(mode)
+    }
+
+    fun setLanguage(language: AppLanguage) {
+        AppLocale.setLanguage(language)
+        preferencesStore.setLanguage(language)
     }
 
     fun setAnimatedBackgroundEnabled(enabled: Boolean) {
@@ -162,13 +278,14 @@ class SettingsViewModel(
                 credentialStore.saveDefaultCredentials(GitCredentials(username.trim(), token.trim()))
             }
             val updated = credentialStore.getDefaultCredentials()
+            val s = AppLocale.current
             localState.update {
                 it.copy(
                     defaultCredentials = updated,
                     infoMessage = if (token.isBlank()) {
-                        "Токен по умолчанию очищен"
+                        s.homeInfoDefaultTokenCleared
                     } else {
-                        "Токен по умолчанию сохранён"
+                        s.homeInfoDefaultTokenSaved
                     }
                 )
             }
@@ -187,13 +304,42 @@ class SettingsViewModel(
                 )
             }
             val updated = credentialStore.getProjectCredentials(targetProjectId)
+            val s = AppLocale.current
             localState.update {
                 it.copy(
                     projectCredentials = updated,
+                    projectOAuthAccount = if (token.isBlank()) it.projectOAuthAccount else null,
                     infoMessage = if (token.isBlank()) {
-                        "Токен проекта очищен"
+                        s.projectInfoProjectTokenCleared
                     } else {
-                        "Токен проекта сохранён"
+                        s.projectInfoProjectTokenSaved
+                    }
+                )
+            }
+        }
+    }
+
+    fun bindProjectOAuthAccount(accountId: String?) {
+        val targetProjectId = projectId ?: return
+        viewModelScope.launch(ioDispatcher) {
+            if (accountId.isNullOrBlank()) {
+                credentialStore.setProjectOAuthAccountId(targetProjectId, null)
+                credentialStore.removeProjectCredentials(targetProjectId)
+            } else {
+                credentialStore.setProjectOAuthAccountId(targetProjectId, accountId)
+            }
+            val bound = credentialStore.getProjectOAuthAccountId(targetProjectId)
+                ?.let { credentialStore.getOAuthAccount(it) }
+            val updatedCreds = credentialStore.getProjectCredentials(targetProjectId)
+            val s = AppLocale.current
+            localState.update {
+                it.copy(
+                    projectCredentials = updatedCreds,
+                    projectOAuthAccount = bound,
+                    infoMessage = if (bound != null) {
+                        s.oauthProjectAccountBoundInfo
+                    } else {
+                        s.projectInfoProjectTokenCleared
                     }
                 )
             }
@@ -212,16 +358,129 @@ class SettingsViewModel(
                 )
             }
             val updated = credentialStore.getRepoCredentials(targetRepoId)
+            val s = AppLocale.current
             localState.update {
                 it.copy(
                     repoCredentials = updated,
+                    repoOAuthAccount = if (token.isBlank()) it.repoOAuthAccount else null,
                     infoMessage = if (token.isBlank()) {
-                        "Токен репозитория очищен"
+                        s.workspaceInfoRepoTokenCleared
                     } else {
-                        "Токен репозитория сохранён"
+                        s.workspaceInfoRepoTokenSaved
                     }
                 )
             }
+        }
+    }
+
+    fun bindRepoOAuthAccount(accountId: String?) {
+        val targetRepoId = repoId ?: return
+        viewModelScope.launch(ioDispatcher) {
+            if (accountId.isNullOrBlank()) {
+                credentialStore.setRepoOAuthAccountId(targetRepoId, null)
+                credentialStore.removeRepoCredentials(targetRepoId)
+            } else {
+                credentialStore.setRepoOAuthAccountId(targetRepoId, accountId)
+            }
+            val bound = credentialStore.getRepoOAuthAccountId(targetRepoId)
+                ?.let { credentialStore.getOAuthAccount(it) }
+            val updatedCreds = credentialStore.getRepoCredentials(targetRepoId)
+            val s = AppLocale.current
+            localState.update {
+                it.copy(
+                    repoCredentials = updatedCreds,
+                    repoOAuthAccount = bound,
+                    infoMessage = if (bound != null) {
+                        s.oauthRepoAccountBoundInfo
+                    } else {
+                        s.workspaceInfoRepoTokenCleared
+                    }
+                )
+            }
+        }
+    }
+
+    fun startGitHubOAuth(
+        clientId: String,
+        bindScope: OAuthAutoBindScope = OAuthAutoBindScope.NONE
+    ) {
+        pendingAutoBindScope = bindScope
+        oauthManager?.startGitHubDeviceFlow(clientId)
+    }
+
+    fun prepareGitLabOAuth(
+        baseUrl: String,
+        clientId: String,
+        bindScope: OAuthAutoBindScope = OAuthAutoBindScope.NONE
+    ): String? {
+        pendingAutoBindScope = bindScope
+        return oauthManager?.prepareGitLabAuthorization(baseUrl, clientId)
+    }
+
+    fun cancelOAuthFlow() {
+        pendingAutoBindScope = OAuthAutoBindScope.NONE
+        oauthManager?.resetFlow()
+    }
+
+    fun getSavedGitLabClientIdForUrl(rawUrl: String): String {
+        val normalized = normalizeGitBaseUrl(rawUrl)
+        val host = extractHostFromGitUrl(normalized) ?: GitOAuthProvider.GITLAB.defaultHost
+        return oauthManager?.effectiveClientId(GitOAuthProvider.GITLAB, host)
+            ?: credentialStore.getOAuthClientId(GitOAuthProvider.GITLAB, host)
+            ?: if (host == GitOAuthProvider.GITLAB.defaultHost) {
+                GitOAuthDefaults.buildConfigClientId(GitOAuthProvider.GITLAB)
+            } else {
+                ""
+            }
+    }
+
+    fun setDefaultOAuthAccountForHost(host: String, accountId: String) {
+        viewModelScope.launch(ioDispatcher) {
+            credentialStore.setDefaultOAuthAccountForHost(host, accountId)
+            oauthManager?.notifyAccountsChanged()
+            val accounts = credentialStore.getOAuthAccounts()
+            val target = accounts.firstOrNull { it.id == accountId }
+            val defaults = credentialStore.getDefaultOAuthAccountIdsByHost()
+            localState.update {
+                it.copy(
+                    oauthAccounts = accounts,
+                    defaultOAuthAccountIdsByHost = defaults,
+                    infoMessage = target?.let { acc ->
+                        AppLocale.current.oauthHostDefaultUpdatedInfo(acc.shortLabel())
+                    }
+                )
+            }
+        }
+    }
+
+    fun removeOAuthAccount(accountId: String) {
+        viewModelScope.launch(ioDispatcher) {
+            val target = credentialStore.getOAuthAccount(accountId)
+            credentialStore.removeOAuthAccount(accountId)
+            oauthManager?.notifyAccountsChanged()
+            val accounts = credentialStore.getOAuthAccounts()
+            val defaults = credentialStore.getDefaultOAuthAccountIdsByHost()
+            val projBound = projectId?.let { credentialStore.getProjectOAuthAccountId(it) }
+                ?.let { id -> accounts.firstOrNull { it.id == id } }
+            val repoBound = repoId?.let { credentialStore.getRepoOAuthAccountId(it) }
+                ?.let { id -> accounts.firstOrNull { it.id == id } }
+            localState.update {
+                it.copy(
+                    oauthAccounts = accounts,
+                    defaultOAuthAccountIdsByHost = defaults,
+                    projectOAuthAccount = projBound,
+                    repoOAuthAccount = repoBound,
+                    infoMessage = target?.let { acc ->
+                        AppLocale.current.oauthAccountRemovedInfo(acc.shortLabel())
+                    }
+                )
+            }
+        }
+    }
+
+    fun notifyInfo(message: String) {
+        if (message.isNotBlank()) {
+            localState.update { it.copy(infoMessage = message) }
         }
     }
 
@@ -240,6 +499,7 @@ class SettingsViewModel(
             } else {
                 localState.value.repoAuthorName to localState.value.repoAuthorEmail
             }
+            val s = AppLocale.current
             localState.update {
                 it.copy(
                     projectAuthorName = updatedProject?.authorName,
@@ -247,9 +507,9 @@ class SettingsViewModel(
                     repoAuthorName = effRepoName,
                     repoAuthorEmail = effRepoEmail,
                     infoMessage = if (clearing) {
-                        "Автор коммитов проекта сброшен (используется по умолчанию)"
+                        s.settingsInfoProjectAuthorReset
                     } else {
-                        "Автор коммитов проекта сохранён"
+                        s.settingsInfoProjectAuthorSaved
                     }
                 )
             }
@@ -262,15 +522,16 @@ class SettingsViewModel(
         val cleanEmail = email.trim().ifEmpty { GitEngine.DEFAULT_AUTHOR_EMAIL }
         viewModelScope.launch(ioDispatcher) {
             gitEngine.setAuthorConfig(File(repo.directoryPath), cleanName, cleanEmail, saveGlobally)
-            val (globalName, globalEmail) = readGlobalAuthor()
+            val (globalName, globalEmail, hasGlobalAuthor) = readGlobalAuthor()
             localState.update {
                 it.copy(
                     repoHasCustomAuthor = true,
                     repoAuthorName = cleanName,
                     repoAuthorEmail = cleanEmail,
+                    hasCustomGlobalAuthor = hasGlobalAuthor,
                     globalAuthorName = globalName,
                     globalAuthorEmail = globalEmail,
-                    infoMessage = "Автор коммитов репозитория обновлён"
+                    infoMessage = AppLocale.current.settingsInfoRepoAuthorUpdated
                 )
             }
         }
@@ -288,7 +549,7 @@ class SettingsViewModel(
                     repoHasCustomAuthor = false,
                     repoAuthorName = effName,
                     repoAuthorEmail = effEmail,
-                    infoMessage = "Автор коммитов репозитория сброшен"
+                    infoMessage = AppLocale.current.settingsInfoRepoAuthorReset
                 )
             }
         }
@@ -315,11 +576,42 @@ class SettingsViewModel(
             }
             localState.update {
                 it.copy(
+                    hasCustomGlobalAuthor = true,
                     globalAuthorName = cleanName,
                     globalAuthorEmail = cleanEmail,
                     repoAuthorName = effRepoName,
                     repoAuthorEmail = effRepoEmail,
-                    infoMessage = "Глобальный автор коммитов сохранён"
+                    infoMessage = AppLocale.current.settingsInfoGlobalAuthorSaved
+                )
+            }
+        }
+    }
+
+    fun clearGlobalAuthor() {
+        viewModelScope.launch(ioDispatcher) {
+            runCatching {
+                val userConfig = SystemReader.getInstance().openUserConfig(null, FS.DETECTED)
+                userConfig.load()
+                userConfig.unset("user", null, "name")
+                userConfig.unset("user", null, "email")
+                userConfig.save()
+            }
+            val repo = localState.value.repoEntry
+            val isGitRepo = localState.value.isGitRepo
+            val project = projectId?.let { registry.findProjectById(it) }
+            val (effRepoName, effRepoEmail) = if (repo != null && isGitRepo) {
+                GitEngine.resolveEffectiveAuthor(gitEngine, File(repo.directoryPath), project)
+            } else {
+                localState.value.repoAuthorName to localState.value.repoAuthorEmail
+            }
+            localState.update {
+                it.copy(
+                    hasCustomGlobalAuthor = false,
+                    globalAuthorName = GitEngine.DEFAULT_AUTHOR_NAME,
+                    globalAuthorEmail = GitEngine.DEFAULT_AUTHOR_EMAIL,
+                    repoAuthorName = effRepoName,
+                    repoAuthorEmail = effRepoEmail,
+                    infoMessage = AppLocale.current.settingsInfoGlobalAuthorReset
                 )
             }
         }
@@ -343,7 +635,7 @@ class SettingsViewModel(
 
     fun deleteLocalModel(modelId: String) {
         localModelManager?.deleteModel(modelId)
-        localState.update { it.copy(infoMessage = "Локальная модель удалена") }
+        localState.update { it.copy(infoMessage = AppLocale.current.settingsInfoLocalModelDeleted) }
     }
 
     fun saveAiSettings(
@@ -372,15 +664,16 @@ class SettingsViewModel(
             }
             val savedKeys = credentialStore.getAllAiApiKeys()
             val savedProxy = credentialStore.getAiProxyUrl().orEmpty()
+            val s = AppLocale.current
             val message = if (settings.provider == AiProvider.LOCAL) {
                 val modelOption = settings.provider.findModelOption(settings.modelName)
                 if (localModelManager?.isModelDownloaded(modelOption.id) == true) {
-                    "Локальная модель «${modelOption.label}» сохранена и активна"
+                    s.settingsInfoLocalModelActive(modelOption.label)
                 } else {
-                    "Настройки агента сохранены (скачайте выбранную локальную модель)"
+                    s.settingsInfoAgentSavedDownloadLocal
                 }
             } else {
-                "Настройки ИИ и агента сохранены"
+                s.settingsInfoAgentSaved
             }
             localState.update {
                 it.copy(
@@ -396,18 +689,19 @@ class SettingsViewModel(
         localState.update { it.copy(infoMessage = null) }
     }
 
-    private fun readGlobalAuthor(): Pair<String, String> {
+    private fun readGlobalAuthor(): Triple<String, String, Boolean> {
         return runCatching {
             val userConfig = SystemReader.getInstance().openUserConfig(null, FS.DETECTED)
             userConfig.load()
-            val name = userConfig.getString("user", null, "name")
-                ?.takeIf { it.isNotBlank() }
-                ?: GitEngine.DEFAULT_AUTHOR_NAME
-            val email = userConfig.getString("user", null, "email")
-                ?.takeIf { it.isNotBlank() }
-                ?: GitEngine.DEFAULT_AUTHOR_EMAIL
-            name to email
-        }.getOrDefault(GitEngine.DEFAULT_AUTHOR_NAME to GitEngine.DEFAULT_AUTHOR_EMAIL)
+            val rawName = userConfig.getString("user", null, "name")?.takeIf { it.isNotBlank() }
+            val rawEmail = userConfig.getString("user", null, "email")?.takeIf { it.isNotBlank() }
+            val hasCustom = rawName != null || rawEmail != null
+            Triple(
+                rawName ?: GitEngine.DEFAULT_AUTHOR_NAME,
+                rawEmail ?: GitEngine.DEFAULT_AUTHOR_EMAIL,
+                hasCustom
+            )
+        }.getOrDefault(Triple(GitEngine.DEFAULT_AUTHOR_NAME, GitEngine.DEFAULT_AUTHOR_EMAIL, false))
     }
 
     companion object {
@@ -419,7 +713,8 @@ class SettingsViewModel(
             registry: ProjectRegistry,
             gitEngine: GitEngine,
             localModelManager: LocalModelManager? = null,
-            onLocalProviderDeselected: () -> Unit = {}
+            onLocalProviderDeselected: () -> Unit = {},
+            oauthManager: GitOAuthManager? = null
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -431,7 +726,8 @@ class SettingsViewModel(
                     registry = registry,
                     gitEngine = gitEngine,
                     localModelManager = localModelManager,
-                    onLocalProviderDeselected = onLocalProviderDeselected
+                    onLocalProviderDeselected = onLocalProviderDeselected,
+                    oauthManager = oauthManager
                 ) as T
             }
         }

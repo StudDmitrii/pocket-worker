@@ -67,6 +67,9 @@ import com.pocketworker.app.core.git.ProjectSummary
 import com.pocketworker.app.core.git.RepoCardInfo
 import com.pocketworker.app.core.git.RepoEntry
 import com.pocketworker.app.core.git.WorkspaceProject
+import com.pocketworker.app.core.i18n.AppStrings
+import com.pocketworker.app.core.i18n.LocalAppStrings
+import com.pocketworker.app.core.storage.AiProvider
 import com.pocketworker.app.ui.ai.ActionsGroupCard
 import com.pocketworker.app.ui.ai.AiChatMessageItem
 import com.pocketworker.app.ui.ai.AiMarkdownText
@@ -96,9 +99,10 @@ fun OnboardingGuideScreen(
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     // Always render the interactive slide guide on a clean, bright light canvas
     PocketWorkerTheme(darkTheme = false) {
-        val slides = remember { buildGuideSlides() }
+        val slides = remember(s) { buildGuideSlides(s) }
         val pagerState = rememberPagerState(initialPage = 0, pageCount = { slides.size })
         val coroutineScope = rememberCoroutineScope()
         val isFirstPage = pagerState.currentPage == 0
@@ -151,12 +155,12 @@ fun OnboardingGuideScreen(
                                 }
                                 Column {
                                     Text(
-                                        text = "Инструкция",
+                                        text = s.onboardingTitle,
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Слайд ${pagerState.currentPage + 1} из ${slides.size}",
+                                        text = s.onboardingSlideCounter(pagerState.currentPage + 1, slides.size),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -166,7 +170,7 @@ fun OnboardingGuideScreen(
                         actions = {
                             TextButton(onClick = onFinish) {
                                 Text(
-                                    text = "Пропустить",
+                                    text = s.commonSkip,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
@@ -251,7 +255,7 @@ fun OnboardingGuideScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Назад",
+                                        text = s.commonBack,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
@@ -272,7 +276,7 @@ fun OnboardingGuideScreen(
                                         .heightIn(min = 48.dp)
                                 ) {
                                     Text(
-                                        text = if (isLastPage) "К работе" else "Дальше",
+                                        text = if (isLastPage) s.commonStartWorking else s.commonNext,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -380,73 +384,56 @@ fun OnboardingGuideScreen(
     }
 }
 
-private fun buildGuideSlides(): List<GuideSlide> = listOf(
+private fun buildGuideSlides(s: AppStrings): List<GuideSlide> = listOf(
     GuideSlide(
-        title = "1. Проекты и папки",
-        description = "На главном экране собирайте связанные репозитории в проекты — например, мобильное приложение, бэкенд и общие библиотеки.",
-        bullets = listOf(
-            "Нажмите «+» внизу экрана, чтобы создать новый проект.",
-            "Карточка сразу показывает число репозиториев и количество несохранённых изменений."
-        ),
+        title = s.onboardingSlide1Title,
+        description = s.onboardingSlide1Desc,
+        bullets = listOf(s.onboardingSlide1Bullet1, s.onboardingSlide1Bullet2),
         preview = { ProjectsSlidePreview() }
     ),
     GuideSlide(
-        title = "2. Репозитории и клонирование",
-        description = "Внутри проекта добавляйте локальные репозитории, клонируйте по HTTPS-ссылке или загружайте сразу группу GitHub / GitLab.",
-        bullets = listOf(
-            "На каждой карточке видны текущая ветка, число изменений и последний коммит.",
-            "Сохранённый PAT-токен подставляется автоматически."
-        ),
+        title = s.onboardingSlide2Title,
+        description = s.onboardingSlide2Desc,
+        bullets = listOf(s.onboardingSlide2Bullet1, s.onboardingSlide2Bullet2),
         preview = { RepositoriesSlidePreview() }
     ),
     GuideSlide(
-        title = "3. Редактор кода и Git",
-        description = "Открывайте файлы с подсветкой синтаксиса, просматривайте diff по строкам и выполняйте все основные команды Git прямо с телефона.",
-        bullets = listOf(
-            "Поддерживаются commit, amend, ветки, merge, stash, теги, pull и push.",
-            "Вкладка «Файлы» и вкладка «Git» всегда синхронизированы."
-        ),
+        title = s.onboardingSlide3Title,
+        description = s.onboardingSlide3Desc,
+        bullets = listOf(s.onboardingSlide3Bullet1, s.onboardingSlide3Bullet2),
         preview = { EditorAndGitSlidePreview() }
     ),
     GuideSlide(
-        title = "4. AI-агент на любом экране",
-        description = "Нажмите на круглую кнопку AI, чтобы открыть чат. Агент видит текущий проект, репозиторий или открытый файл и отвечает с красивым форматированием.",
-        bullets = listOf(
-            "Кнопку AI можно перетаскивать по экрану, чтобы она не мешала коду.",
-            "Агент умеет искать и править файлы, проверять синтаксис и запускать Git."
-        ),
+        title = s.onboardingSlide4Title,
+        description = s.onboardingSlide4Desc,
+        bullets = listOf(s.onboardingSlide4Bullet1, s.onboardingSlide4Bullet2),
         preview = { AiAssistantSlidePreview() }
     ),
     GuideSlide(
-        title = "5. Действия, файлы и откат",
-        description = "После ответа шаги агента сворачиваются в компактный блок, а изменённые файлы выводятся со статистикой строк из Git.",
-        bullets = listOf(
-            "Нажмите на изменённый файл в чате, чтобы сразу увидеть его Git diff.",
-            "Нажмите на своё сообщение, чтобы повторить его и автоматически откатить правки агента."
-        ),
+        title = s.onboardingSlide5Title,
+        description = s.onboardingSlide5Desc,
+        bullets = listOf(s.onboardingSlide5Bullet1, s.onboardingSlide5Bullet2),
         preview = { ActionsAndFilesSlidePreview() }
     ),
     GuideSlide(
-        title = "6. Настройки ИИ и доступа Git",
-        description = "Выберите облачную модель или скачайте локальную Gemma 4 для работы офлайн. Настройте токены и автора коммитов на нужном уровне.",
-        bullets = listOf(
-            "Доступны Claude, Gemini (Google AI Studio), OpenRouter, OpenAI и офлайн Gemma 4.",
-            "Git-токен и автор коммитов работают по иерархии: по умолчанию → проект → репозиторий."
-        ),
+        title = s.onboardingSlide6Title,
+        description = s.onboardingSlide6Desc,
+        bullets = listOf(s.onboardingSlide6Bullet1, s.onboardingSlide6Bullet2),
         preview = { SettingsSlidePreview() }
     )
 )
 
 @Composable
 private fun ProjectsSlidePreview() {
-    val sampleSummary = remember {
+    val s = LocalAppStrings.current
+    val sampleSummary = remember(s) {
         ProjectSummary(
             project = WorkspaceProject(
                 id = "demo_proj",
                 name = "Mobile App",
                 directoryPath = "/demo/mobile-app",
                 createdAt = 0L,
-                description = "Android-приложение и backend-сервис"
+                description = s.onboardingMockProjectDesc
             ),
             repoCount = 2,
             repoNamesPreview = listOf("android-client", "api-server"),
@@ -484,7 +471,7 @@ private fun ProjectsSlidePreview() {
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "Новый проект",
+                    text = s.homeNewProject,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -495,7 +482,8 @@ private fun ProjectsSlidePreview() {
 
 @Composable
 private fun RepositoriesSlidePreview() {
-    val sampleRepo = remember {
+    val s = LocalAppStrings.current
+    val sampleRepo = remember(s) {
         RepoCardInfo(
             entry = RepoEntry(
                 id = "demo_repo",
@@ -512,7 +500,7 @@ private fun RepositoriesSlidePreview() {
             untrackedCount = 0,
             aheadCount = 1,
             behindCount = 0,
-            lastCommitMessage = "feat: обновлён экран настроек",
+            lastCommitMessage = s.onboardingMockCommitMsg,
             lastCommitTime = System.currentTimeMillis() - 600_000L,
             remoteUrl = "https://github.com/team/android-client.git"
         )
@@ -529,11 +517,12 @@ private fun RepositoriesSlidePreview() {
 
 @Composable
 private fun EditorAndGitSlidePreview() {
-    val sampleCode = remember {
+    val s = LocalAppStrings.current
+    val sampleCode = remember(s) {
         """
         fun greetUser(name: String): String {
             val clean = name.trim().ifEmpty { "Dev" }
-            return "Привет, ${'$'}clean!"
+            return "${s.onboardingMockGreetingCode}, ${'$'}clean!"
         }
         """.trimIndent()
     }
@@ -653,6 +642,7 @@ private fun StaticActionPill(
 
 @Composable
 private fun AiAssistantSlidePreview() {
+    val s = LocalAppStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -666,13 +656,13 @@ private fun AiAssistantSlidePreview() {
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Кнопка вызова AI-агента",
+                text = s.onboardingMockAiButtonTitle,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Доступна поверх проектов, папок и редактора",
+                text = s.onboardingMockAiButtonSubtitle,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -702,7 +692,7 @@ private fun AiAssistantSlidePreview() {
                 fontWeight = FontWeight.SemiBold
             )
             AiMarkdownText(
-                markdown = "Готово! Добавил проверку токена в `AuthService.kt` и обновил **unit-тесты**.",
+                markdown = s.onboardingMockAiResponse,
                 isStreaming = false
             )
         }
@@ -711,7 +701,8 @@ private fun AiAssistantSlidePreview() {
 
 @Composable
 private fun ActionsAndFilesSlidePreview() {
-    val sampleGroup = remember {
+    val s = LocalAppStrings.current
+    val sampleGroup = remember(s) {
         AiChatMessageItem.ActionsGroup(
             id = "demo_actions",
             turnId = "demo_turn",
@@ -721,7 +712,7 @@ private fun ActionsAndFilesSlidePreview() {
                     toolCallId = "c1",
                     toolName = "fs_find_files",
                     category = ToolActivityCategory.SEARCHING,
-                    title = "Поиск файлов",
+                    title = s.onboardingMockActionSearch,
                     subtitle = "*Auth*",
                     status = ToolActivityStatus.SUCCEEDED
                 ),
@@ -730,7 +721,7 @@ private fun ActionsAndFilesSlidePreview() {
                     toolCallId = "c2",
                     toolName = "fs_read_file",
                     category = ToolActivityCategory.READING,
-                    title = "Чтение файла",
+                    title = s.onboardingMockActionRead,
                     subtitle = "AuthService.kt",
                     status = ToolActivityStatus.SUCCEEDED
                 ),
@@ -739,7 +730,7 @@ private fun ActionsAndFilesSlidePreview() {
                     toolCallId = "c3",
                     toolName = "fs_edit_file",
                     category = ToolActivityCategory.DOING,
-                    title = "Файл обновлён",
+                    title = s.onboardingMockActionUpdated,
                     subtitle = "AuthService.kt",
                     status = ToolActivityStatus.SUCCEEDED
                 )
@@ -778,7 +769,8 @@ private fun ActionsAndFilesSlidePreview() {
 
 @Composable
 private fun SettingsSlidePreview() {
-    val providers = remember { listOf("Claude", "Gemini", "OpenRouter", "OpenAI", "Локальный") }
+    val s = LocalAppStrings.current
+    val providers = remember(s) { AiProvider.entries.map { s.providerDisplayName(it) } }
 
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -793,7 +785,7 @@ private fun SettingsSlidePreview() {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Провайдер ИИ",
+                text = s.onboardingMockAiProviderLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -844,15 +836,15 @@ private fun SettingsSlidePreview() {
 
             SettingsActionRow(
                 icon = Icons.Rounded.Key,
-                title = "Токен Git по умолчанию (PAT)",
-                subtitle = "Сохранён в Keystore (dev-user)",
+                title = s.settingsDefaultTokenTitle,
+                subtitle = s.onboardingMockTokenSaved,
                 onClick = {},
                 interactive = false
             )
 
             SettingsActionRow(
                 icon = Icons.Rounded.Person,
-                title = "Автор коммитов по умолчанию",
+                title = s.settingsDefaultAuthorTitle,
                 subtitle = "Ivan Dev <ivan@example.com>",
                 onClick = {},
                 interactive = false

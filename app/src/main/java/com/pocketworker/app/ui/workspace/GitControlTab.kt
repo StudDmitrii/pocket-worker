@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
@@ -66,6 +67,7 @@ import com.pocketworker.app.core.git.GitFileChange
 import com.pocketworker.app.core.git.GitRemote
 import com.pocketworker.app.core.git.GitStashEntry
 import com.pocketworker.app.core.git.GitTag
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.formatShortTimestamp
 
 @Composable
@@ -101,10 +103,9 @@ fun GitControlTab(
     onCreateTag: (name: String, message: String?) -> Unit,
     onDeleteTag: (name: String) -> Unit,
     onPushTags: (remote: String) -> Unit,
-    onClearGitOutputLogs: () -> Unit,
-    onOpenCredentialsDialog: () -> Unit,
-    onOpenAuthorDialog: () -> Unit
+    onClearGitOutputLogs: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val status = state.gitStatus
     if (status == null || !status.isGitRepo) {
         Box(
@@ -124,11 +125,11 @@ fun GitControlTab(
                     modifier = Modifier.size(56.dp)
                 )
                 Text(
-                    text = "Git не инициализирован",
+                    text = s.gitNotInitializedTitle,
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "Этот репозиторий пока без Git. Инициализируйте его, чтобы работать с изменениями, ветками и синхронизацией.",
+                    text = s.gitNotInitializedSubtitle,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -136,7 +137,7 @@ fun GitControlTab(
                     onClick = onInitGit,
                     modifier = Modifier.heightIn(min = 48.dp)
                 ) {
-                    Text("Инициализировать Git (ветка main)")
+                    Text(s.gitInitButton)
                 }
             }
         }
@@ -238,16 +239,41 @@ fun GitControlTab(
                         if (hasRemote && !status.isUnborn) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "↑${status.aheadCount} ↓${status.behindCount}",
+                                text = "↑${status.aheadCount}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontWeight = if (status.aheadCount > 0) FontWeight.Bold else FontWeight.Normal,
+                                color = if (status.aheadCount > 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
                             )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "↓${status.behindCount}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (status.behindCount > 0) FontWeight.Bold else FontWeight.Normal,
+                                color = if (status.behindCount > 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                            if (state.isAutoFetching) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                CircularProgressIndicator(
+                                    strokeWidth = 1.8.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "Выбрать ветку",
+                            contentDescription = s.gitSelectBranchDesc,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
@@ -261,7 +287,7 @@ fun GitControlTab(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.MoreHoriz,
-                        contentDescription = "Меню Git"
+                        contentDescription = s.gitMenuDesc
                     )
                 }
             }
@@ -273,7 +299,7 @@ fun GitControlTab(
                 OutlinedTextField(
                     value = commitMessage,
                     onValueChange = { commitMessage = it },
-                    placeholder = { Text("Сообщение коммита...") },
+                    placeholder = { Text(s.gitCommitMessagePlaceholder) },
                     minLines = 2,
                     maxLines = 4,
                     shape = RoundedCornerShape(14.dp),
@@ -298,14 +324,14 @@ fun GitControlTab(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Режим Amend (дополнить последний коммит)",
+                                text = s.gitAmendBanner,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(
                                 imageVector = Icons.Rounded.Close,
-                                contentDescription = "Отключить Amend",
+                                contentDescription = s.gitDisableAmend,
                                 tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -390,7 +416,7 @@ fun GitControlTab(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = "Варианты коммита",
+                                    contentDescription = s.gitCommitOptionsDesc,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -402,7 +428,7 @@ fun GitControlTab(
                         onDismissRequest = { showCommitMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Commit (подготовленные)") },
+                            text = { Text(s.gitCommitStaged) },
                             leadingIcon = { Icon(Icons.Rounded.Check, contentDescription = null) },
                             enabled = canCommitStaged,
                             onClick = {
@@ -434,7 +460,7 @@ fun GitControlTab(
                         if (!status.isUnborn) {
                             DropdownMenuItem(
                                 text = {
-                                    Text(if (amendCommit) "Отключить Amend" else "Commit (Amend)")
+                                    Text(if (amendCommit) s.gitDisableAmend else s.gitCommitAmend)
                                 },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                                 onClick = {
@@ -452,7 +478,7 @@ fun GitControlTab(
         if (status.stagedChanges.isNotEmpty()) {
             item(key = "sc_staged_section") {
                 ChangesSectionCard(
-                    title = "Подготовлено (Staged)",
+                    title = s.gitStagedSectionTitle,
                     count = status.stagedChanges.size,
                     expanded = stagedExpanded,
                     onToggleExpanded = { stagedExpanded = !stagedExpanded },
@@ -463,7 +489,7 @@ fun GitControlTab(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Remove,
-                                contentDescription = "Убрать все из индекса",
+                                contentDescription = s.gitUnstageAllDesc,
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -473,7 +499,7 @@ fun GitControlTab(
                         changes = status.stagedChanges,
                         asTree = state.viewChangesAsTree,
                         primaryActionIcon = Icons.Rounded.Remove,
-                        primaryActionDesc = "Убрать из индекса",
+                        primaryActionDesc = s.gitUnstageDesc,
                         onRowClick = { onViewDiff(it.path, true) },
                         onPrimaryAction = { onUnstageFile(it.path) },
                         onDiscardAction = null
@@ -485,7 +511,7 @@ fun GitControlTab(
         // 4. Working Changes Section
         item(key = "sc_changes_section") {
             ChangesSectionCard(
-                title = "Изменения (Changes)",
+                title = s.gitChangesSectionTitle,
                 count = status.unstagedChanges.size,
                 expanded = changesExpanded,
                 onToggleExpanded = { changesExpanded = !changesExpanded },
@@ -497,7 +523,7 @@ fun GitControlTab(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Restore,
-                                contentDescription = "Откатить все изменения",
+                                contentDescription = s.gitDiscardAllDesc,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -507,7 +533,7 @@ fun GitControlTab(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Add,
-                                contentDescription = "Добавить все в индекс",
+                                contentDescription = s.gitStageAllDesc,
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -517,9 +543,9 @@ fun GitControlTab(
                 if (status.unstagedChanges.isEmpty()) {
                     Text(
                         text = if (status.stagedChanges.isEmpty()) {
-                            "Рабочая директория чиста"
+                            s.gitWorkingTreeClean
                         } else {
-                            "Нет неподготовленных изменений"
+                            s.gitNoUnstagedChanges
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -530,7 +556,7 @@ fun GitControlTab(
                         changes = status.unstagedChanges,
                         asTree = state.viewChangesAsTree,
                         primaryActionIcon = Icons.Rounded.Add,
-                        primaryActionDesc = "Добавить в индекс",
+                        primaryActionDesc = s.gitStageDesc,
                         onRowClick = { onViewDiff(it.path, false) },
                         onPrimaryAction = { onStageFile(it.path) },
                         onDiscardAction = { fileToDiscard = it }
@@ -543,7 +569,7 @@ fun GitControlTab(
         if (state.stashes.isNotEmpty()) {
             item(key = "sc_stashes_section") {
                 ChangesSectionCard(
-                    title = "Stash (Отложенные)",
+                    title = s.gitStashSectionTitle,
                     count = state.stashes.size,
                     expanded = stashExpanded,
                     onToggleExpanded = { stashExpanded = !stashExpanded },
@@ -604,7 +630,7 @@ fun GitControlTab(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Удалить stash",
+                                        contentDescription = s.gitDeleteStashDesc,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -653,9 +679,7 @@ fun GitControlTab(
             onCreateTagClick = { showCreateTagDialog = true },
             onDeleteTagClick = { tagToDelete = it },
             onPushTags = onPushTags,
-            onShowGitOutput = { showGitOutputDialog = true },
-            onOpenCredentialsDialog = onOpenCredentialsDialog,
-            onOpenAuthorDialog = onOpenAuthorDialog
+            onShowGitOutput = { showGitOutputDialog = true }
         )
     }
 
@@ -711,9 +735,9 @@ fun GitControlTab(
     fileToDiscard?.let { file ->
         AlertDialog(
             onDismissRequest = { fileToDiscard = null },
-            title = { Text("Откатить изменения?") },
+            title = { Text(s.gitDiscardFileTitle) },
             text = {
-                Text("Все несохранённые изменения в файле «${file.path}» будут потеряны.")
+                Text(s.gitDiscardFileMessage(file.path))
             },
             confirmButton = {
                 TextButton(
@@ -722,10 +746,10 @@ fun GitControlTab(
                         fileToDiscard = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Откатить") }
+                ) { Text(s.gitDiscardAction) }
             },
             dismissButton = {
-                TextButton(onClick = { fileToDiscard = null }) { Text("Отмена") }
+                TextButton(onClick = { fileToDiscard = null }) { Text(s.commonCancel) }
             }
         )
     }
@@ -733,9 +757,9 @@ fun GitControlTab(
     if (showDiscardAllConfirm) {
         AlertDialog(
             onDismissRequest = { showDiscardAllConfirm = false },
-            title = { Text("Откатить все изменения?") },
+            title = { Text(s.gitDiscardAllTitle) },
             text = {
-                Text("Все локальные изменения в отслеживаемых файлах будут сброшены, а новые (untracked) файлы — удалены.")
+                Text(s.gitDiscardAllMessage)
             },
             confirmButton = {
                 TextButton(
@@ -744,10 +768,10 @@ fun GitControlTab(
                         showDiscardAllConfirm = false
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Откатить всё") }
+                ) { Text(s.gitDiscardAllAction) }
             },
             dismissButton = {
-                TextButton(onClick = { showDiscardAllConfirm = false }) { Text("Отмена") }
+                TextButton(onClick = { showDiscardAllConfirm = false }) { Text(s.commonCancel) }
             }
         )
     }
@@ -755,9 +779,9 @@ fun GitControlTab(
     forcePushRemote?.let { remote ->
         AlertDialog(
             onDismissRequest = { forcePushRemote = null },
-            title = { Text("Выполнить Force Push?") },
+            title = { Text(s.gitForcePushTitle) },
             text = {
-                Text("Удалённая ветка в «$remote» будет принудительно перезаписана вашей локальной историей.")
+                Text(s.gitForcePushMessage(remote))
             },
             confirmButton = {
                 TextButton(
@@ -769,7 +793,7 @@ fun GitControlTab(
                 ) { Text("Force Push") }
             },
             dismissButton = {
-                TextButton(onClick = { forcePushRemote = null }) { Text("Отмена") }
+                TextButton(onClick = { forcePushRemote = null }) { Text(s.commonCancel) }
             }
         )
     }
@@ -793,8 +817,8 @@ fun GitControlTab(
     remoteToDelete?.let { remote ->
         AlertDialog(
             onDismissRequest = { remoteToDelete = null },
-            title = { Text("Удалить remote «${remote.name}»?") },
-            text = { Text("Ссылка ${remote.fetchUrl} будет отвязана от локального проекта.") },
+            title = { Text(s.gitRemoveRemoteTitle(remote.name)) },
+            text = { Text(s.gitRemoveRemoteMessage(remote.fetchUrl)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -802,10 +826,10 @@ fun GitControlTab(
                         remoteToDelete = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Удалить") }
+                ) { Text(s.commonDelete) }
             },
             dismissButton = {
-                TextButton(onClick = { remoteToDelete = null }) { Text("Отмена") }
+                TextButton(onClick = { remoteToDelete = null }) { Text(s.commonCancel) }
             }
         )
     }
@@ -823,8 +847,8 @@ fun GitControlTab(
     stashToDrop?.let { stash ->
         AlertDialog(
             onDismissRequest = { stashToDrop = null },
-            title = { Text("Удалить stash@{${stash.index}}?") },
-            text = { Text("Отложенные изменения «${stash.message}» будут безвозвратно удалены.") },
+            title = { Text(s.gitDropStashTitle(stash.index)) },
+            text = { Text(s.gitDropStashMessage(stash.message)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -832,10 +856,10 @@ fun GitControlTab(
                         stashToDrop = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Удалить") }
+                ) { Text(s.commonDelete) }
             },
             dismissButton = {
-                TextButton(onClick = { stashToDrop = null }) { Text("Отмена") }
+                TextButton(onClick = { stashToDrop = null }) { Text(s.commonCancel) }
             }
         )
     }
@@ -843,8 +867,8 @@ fun GitControlTab(
     if (showClearStashesConfirm) {
         AlertDialog(
             onDismissRequest = { showClearStashesConfirm = false },
-            title = { Text("Очистить все Stash?") },
-            text = { Text("Все сохранённые записи Stash (${state.stashes.size}) будут удалены.") },
+            title = { Text(s.gitClearStashesTitle) },
+            text = { Text(s.gitClearStashesMessage(state.stashes.size)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -852,10 +876,10 @@ fun GitControlTab(
                         showClearStashesConfirm = false
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Очистить") }
+                ) { Text(s.commonClear) }
             },
             dismissButton = {
-                TextButton(onClick = { showClearStashesConfirm = false }) { Text("Отмена") }
+                TextButton(onClick = { showClearStashesConfirm = false }) { Text(s.commonCancel) }
             }
         )
     }
@@ -870,8 +894,8 @@ fun GitControlTab(
     tagToDelete?.let { tag ->
         AlertDialog(
             onDismissRequest = { tagToDelete = null },
-            title = { Text("Удалить тег «${tag.name}»?") },
-            text = { Text("Локальный тег будет удалён из репозитория.") },
+            title = { Text(s.gitDeleteTagTitle(tag.name)) },
+            text = { Text(s.gitDeleteTagMessage) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -879,10 +903,10 @@ fun GitControlTab(
                         tagToDelete = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("Удалить") }
+                ) { Text(s.commonDelete) }
             },
             dismissButton = {
-                TextButton(onClick = { tagToDelete = null }) { Text("Отмена") }
+                TextButton(onClick = { tagToDelete = null }) { Text(s.commonCancel) }
             }
         )
     }
@@ -1111,7 +1135,7 @@ private fun WorkingFileRow(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Restore,
-                    contentDescription = "Откатить",
+                    contentDescription = LocalAppStrings.current.gitDiscardAction,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )

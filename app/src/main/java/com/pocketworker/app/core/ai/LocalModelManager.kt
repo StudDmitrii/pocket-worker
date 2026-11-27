@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -124,7 +125,7 @@ class LocalModelManager(
                             status = LocalModelStatus.ERROR,
                             downloadedBytes = existingBytes,
                             totalBytes = spec.expectedSizeBytes,
-                            errorMessage = "Недостаточно памяти на устройстве: нужно ~$neededGb ГБ, свободно $freeGb ГБ."
+                            errorMessage = AppLocale.current.localModelErrLowStorage(neededGb, freeGb)
                         )
                     )
                     return@launch
@@ -153,7 +154,7 @@ class LocalModelManager(
                     }
 
                     if (code !in 200..299) {
-                        throw IOException("Сервер загрузки вернул HTTP $code")
+                        throw IOException(AppLocale.current.localModelErrHttpStatus(code))
                     }
 
                     val appendMode = code == HttpURLConnection.HTTP_PARTIAL && existingBytes > 0L
@@ -214,10 +215,10 @@ class LocalModelManager(
                     }
 
                     if (downloaded <= 0L) {
-                        throw IOException("Загруженный файл модели пуст.")
+                        throw IOException(AppLocale.current.localModelErrEmptyFile)
                     }
                     if (contentLength > 0L && downloaded < totalBytes) {
-                        throw IOException("Загрузка прервалась не полностью. Нажмите «Скачать модель» для докачки.")
+                        throw IOException(AppLocale.current.localModelErrIncomplete)
                     }
 
                     if (targetFile.exists()) {
@@ -252,7 +253,7 @@ class LocalModelManager(
                         status = LocalModelStatus.ERROR,
                         downloadedBytes = partialBytes,
                         totalBytes = spec.expectedSizeBytes,
-                        errorMessage = ex.localizedMessage ?: "Не удалось скачать модель."
+                        errorMessage = ex.localizedMessage ?: AppLocale.current.localModelErrDownloadFailed
                     )
                 )
             } finally {
@@ -321,14 +322,14 @@ class LocalModelManager(
                 val location = conn.getHeaderField("Location")
                 conn.disconnect()
                 if (location.isNullOrBlank()) {
-                    throw IOException("Некорректный редирект (HTTP $code) без заголовка Location.")
+                    throw IOException(AppLocale.current.localModelErrBadRedirect(code))
                 }
                 currentUrl = URL(url, location).toString()
                 continue
             }
             return conn
         }
-        throw IOException("Слишком много перенаправлений при загрузке модели.")
+        throw IOException(AppLocale.current.localModelErrTooManyRedirects)
     }
 
     private fun buildInitialStates(): Map<String, LocalModelDownloadState> {

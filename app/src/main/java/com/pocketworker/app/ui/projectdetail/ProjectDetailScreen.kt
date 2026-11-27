@@ -34,8 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,8 +55,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.RepoCardInfo
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
 import com.pocketworker.app.ui.common.OnLifecycleResume
+import com.pocketworker.app.ui.common.NewItemHighlightContainer
+import com.pocketworker.app.ui.common.TopNotificationHost
+import com.pocketworker.app.ui.common.rememberTopNotificationState
 import com.pocketworker.app.ui.common.WorkspaceBackdrop
 import com.pocketworker.app.ui.common.backdropCardBorderColor
 import com.pocketworker.app.ui.common.backdropCardContainerColor
@@ -70,13 +72,15 @@ import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 fun ProjectDetailScreen(
     viewModel: ProjectDetailViewModel,
     animatedBackgroundEnabled: Boolean,
+    isVisibleToUser: Boolean = true,
     onBack: () -> Unit,
     onOpenRepo: (repoId: String) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val notificationState = rememberTopNotificationState()
     val isDark = LocalIsDarkTheme.current
+    val s = LocalAppStrings.current
 
     var showAddChoiceSheet by remember { mutableStateOf(false) }
     var showCloneDialog by remember { mutableStateOf(false) }
@@ -89,9 +93,13 @@ fun ProjectDetailScreen(
     }
 
     LaunchedEffect(state.errorMessage, state.infoMessage) {
-        val msg = state.errorMessage ?: state.infoMessage
-        if (msg != null) {
-            snackbarHostState.showSnackbar(msg)
+        val err = state.errorMessage
+        val info = state.infoMessage
+        if (err != null) {
+            notificationState.show(err, isError = true)
+            viewModel.clearMessages()
+        } else if (info != null) {
+            notificationState.show(info, isError = false)
             viewModel.clearMessages()
         }
     }
@@ -111,19 +119,19 @@ fun ProjectDetailScreen(
                     ),
                     navigationIcon = {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "К проектам")
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = s.projectBackToProjects)
                         }
                     },
                     title = {
                         Column {
                             Text(
-                                text = state.project?.name ?: "Проект",
+                                text = state.project?.name ?: s.projectFallbackTitle,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Репозитории (${state.repos.size})",
+                                text = s.projectRepositoriesCount(state.repos.size),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -133,10 +141,10 @@ fun ProjectDetailScreen(
                         AnimatedRefreshIconButton(
                             isRefreshing = state.isLoading,
                             onClick = { viewModel.refresh() },
-                            contentDescription = "Обновить"
+                            contentDescription = s.commonRefresh
                         )
                         IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                            Icon(Icons.Rounded.Settings, contentDescription = s.commonSettings)
                         }
                     }
                 )
@@ -145,10 +153,9 @@ fun ProjectDetailScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showAddChoiceSheet = true },
                     icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text("Добавить репозиторий") }
+                    text = { Text(s.projectAddRepo) }
                 )
-            },
-            snackbarHost = { SnackbarHost(snackbarHostState) }
+            }
         ) { padding ->
             Box(
                 modifier = Modifier
@@ -161,7 +168,7 @@ fun ProjectDetailScreen(
                     }
                     state.repos.isEmpty() -> {
                         EmptyReposPlaceholder(
-                            projectName = state.project?.name ?: "проекте",
+                            projectName = state.project?.name ?: s.projectFallbackInLocation,
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
@@ -176,16 +183,31 @@ fun ProjectDetailScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(state.repos, key = { it.entry.id }) { card ->
-                                RepoCard(
-                                    info = card,
-                                    isDark = isDark,
-                                    onClick = { onOpenRepo(card.entry.id) },
-                                    onDeleteClick = { repoToDelete = card }
-                                )
+                                NewItemHighlightContainer(
+                                    itemId = card.entry.id,
+                                    isNewlyAdded = card.entry.id in state.newlyAddedRepoIds,
+                                    isVisibleToUser = isVisibleToUser,
+                                    onHighlightFinished = {
+                                        viewModel.consumeNewlyAddedRepo(card.entry.id)
+                                    },
+                                    modifier = Modifier.animateItem()
+                                ) {
+                                    RepoCard(
+                                        info = card,
+                                        isDark = isDark,
+                                        onClick = { onOpenRepo(card.entry.id) },
+                                        onDeleteClick = { repoToDelete = card }
+                                    )
+                                }
                             }
                         }
                     }
                 }
+
+                TopNotificationHost(
+                    state = notificationState,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
             }
         }
     }
@@ -215,6 +237,7 @@ fun ProjectDetailScreen(
         AddGroupSheet(
             state = state,
             fallbackCredentials = state.projectCredentials ?: state.defaultCredentials,
+            hasConnectedOAuthAccounts = state.hasConnectedOAuthAccounts,
             onClearError = { viewModel.clearGroupError() },
             onDiscover = { url, useAuth, user, token ->
                 viewModel.discoverGroupRepositories(
@@ -252,6 +275,7 @@ fun ProjectDetailScreen(
             cloneProgress = state.cloneProgress,
             errorMessage = state.cloneError,
             fallbackCredentials = state.projectCredentials ?: state.defaultCredentials,
+            hasConnectedOAuthAccounts = state.hasConnectedOAuthAccounts,
             onClearError = { viewModel.clearCloneError() },
             onDismiss = {
                 viewModel.clearCloneError()
@@ -306,9 +330,9 @@ fun ProjectDetailScreen(
     repoToDelete?.let { card ->
         AlertDialog(
             onDismissRequest = { repoToDelete = null },
-            title = { Text("Удалить репозиторий «${card.entry.name}»?") },
+            title = { Text(s.projectDeleteRepoTitle(card.entry.name)) },
             text = {
-                Text("Локальная папка репозитория и его история на устройстве будут удалены. Удалённый репозиторий в облаке не пострадает.")
+                Text(s.projectDeleteRepoMessage)
             },
             confirmButton = {
                 TextButton(
@@ -320,12 +344,12 @@ fun ProjectDetailScreen(
                         contentColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text("Удалить")
+                    Text(s.commonDelete)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { repoToDelete = null }) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
             }
         )
@@ -337,6 +361,7 @@ private fun EmptyReposPlaceholder(
     projectName: String,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     Column(
         modifier = modifier.padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -349,11 +374,11 @@ private fun EmptyReposPlaceholder(
             modifier = Modifier.size(64.dp)
         )
         Text(
-            text = "В проекте «$projectName» пока пусто",
+            text = s.projectEmptyTitle(projectName),
             style = MaterialTheme.typography.titleLarge
         )
         Text(
-            text = "Добавьте сюда репозитории (например, client, backend, admin, services): клонируйте по Git-ссылке, загрузите группу или создайте новый.",
+            text = s.projectEmptySubtitle,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -368,6 +393,7 @@ internal fun RepoCard(
     onDeleteClick: () -> Unit,
     interactive: Boolean = true
 ) {
+    val s = LocalAppStrings.current
     val cardShape = RoundedCornerShape(18.dp)
     Surface(
         modifier = Modifier
@@ -419,7 +445,7 @@ internal fun RepoCard(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.DeleteOutline,
-                        contentDescription = "Удалить репозиторий",
+                        contentDescription = s.projectDeleteRepoDesc,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -457,9 +483,9 @@ internal fun RepoCard(
 
                     val dirtyTotal = info.changedFilesCount + info.untrackedCount
                     val statusLabel = when {
-                        info.isUnborn && dirtyTotal == 0 -> "Нет коммитов"
-                        dirtyTotal == 0 -> "Чисто"
-                        else -> "Изменений: $dirtyTotal"
+                        info.isUnborn && dirtyTotal == 0 -> s.projectRepoStatusNoCommits
+                        dirtyTotal == 0 -> s.projectRepoStatusClean
+                        else -> s.projectRepoStatusChanges(dirtyTotal)
                     }
                     Surface(
                         color = if (dirtyTotal > 0) {
@@ -497,7 +523,7 @@ internal fun RepoCard(
                 }
             } else {
                 Text(
-                    text = "Без Git (можно инициализировать внутри)",
+                    text = s.projectRepoNoGit,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

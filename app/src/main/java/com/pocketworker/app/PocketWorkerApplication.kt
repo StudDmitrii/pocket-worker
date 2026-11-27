@@ -10,10 +10,12 @@ import com.pocketworker.app.core.ai.LocalModelManager
 import com.pocketworker.app.core.ai.McpUndoManager
 import com.pocketworker.app.core.git.AndroidSystemReader
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.HttpRepoGroupDiscoveryService
 import com.pocketworker.app.core.git.JGitEngine
 import com.pocketworker.app.core.git.ProjectFileManager
 import com.pocketworker.app.core.git.RepoGroupDiscoveryService
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.mcp.JsSandboxSyntaxEngine
 import com.pocketworker.app.core.mcp.PocketWorkerMcpServer
 import com.pocketworker.app.core.mcp.SyntaxCheckEngine
@@ -39,7 +41,13 @@ class AppContainer(application: Application) {
     val fileManager: ProjectFileManager = ProjectFileManager()
     val groupDiscoveryService: RepoGroupDiscoveryService = HttpRepoGroupDiscoveryService()
     val credentialStore: CredentialStore = KeystoreCredentialStore(application)
-    val preferencesStore: AppPreferencesStore = SharedPreferencesAppPreferencesStore(application)
+    val oauthManager: GitOAuthManager = GitOAuthManager(
+        credentialStore = credentialStore,
+        scope = appScope
+    )
+    val preferencesStore: AppPreferencesStore = SharedPreferencesAppPreferencesStore(application).also { store ->
+        AppLocale.setLanguage(store.preferences.value.language)
+    }
     val projectRegistry: ProjectRegistry = ProjectRegistry(
         metadataFile = File(application.filesDir, "projects_registry.json"),
         projectsRootDir = File(application.filesDir, "projects")
@@ -65,7 +73,8 @@ class AppContainer(application: Application) {
         groupDiscoveryService = groupDiscoveryService,
         currentLocationProvider = { activeLocationContext },
         confirmFileEditsProvider = { preferencesStore.preferences.value.aiSettings.confirmFileEdits },
-        syntaxCheckEngine = syntaxCheckEngine
+        syntaxCheckEngine = syntaxCheckEngine,
+        oauthManager = oauthManager
     )
 
     val aiChatHistoryStore: AiChatHistoryStore = FileAiChatHistoryStore(

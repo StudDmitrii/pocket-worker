@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.AiProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -96,8 +97,8 @@ class OpenAiStreamingClient(
 
                 val errorObj = payload.optJSONObject("error")
                 if (errorObj != null) {
-                    val msg = errorObj.optString("message", "").ifBlank {
-                        "Неизвестная ошибка потока ${provider.displayName}"
+                    val msg = errorObj.optNonNullString("message").ifBlank {
+                        AppLocale.current.llmErrProviderStreamUnknown(provider.displayName)
                     }
                     emit(LlmStreamEvent.Error(message = msg))
                     finishedEmitted = true
@@ -108,7 +109,7 @@ class OpenAiStreamingClient(
                 if (choices.length() == 0) return@postStream
                 val choice = choices.optJSONObject(0) ?: return@postStream
 
-                val reason = choice.optString("finish_reason", "").takeIf { it.isNotBlank() && it != "null" }
+                val reason = choice.optNonNullString("finish_reason").takeIf { it.isNotBlank() }
                 if (reason != null) finishReason = reason
 
                 val delta = choice.optJSONObject("delta")
@@ -119,11 +120,9 @@ class OpenAiStreamingClient(
                         mergeReasoningDetailChunks(reasoningDetails, rdArray)
                     }
 
-                    if (delta.has("content") && !delta.isNull("content")) {
-                        val content = delta.optString("content", "")
-                        if (content.isNotEmpty()) {
-                            emit(LlmStreamEvent.TextDelta(content))
-                        }
+                    val content = delta.optNonNullString("content")
+                    if (content.isNotEmpty()) {
+                        emit(LlmStreamEvent.TextDelta(content))
                     }
 
                     val tcArray = delta.optJSONArray("tool_calls")
@@ -133,12 +132,12 @@ class OpenAiStreamingClient(
                             val idx = tc.optInt("index", i)
                             val acc = accumulators.getOrPut(idx) { ToolCallAccumulator() }
 
-                            val idPart = tc.optString("id", "")
+                            val idPart = tc.optNonNullString("id")
                             if (idPart.isNotBlank()) acc.id = idPart
 
                             val fn = tc.optJSONObject("function")
                             if (fn != null) {
-                                val namePart = fn.optString("name", "")
+                                val namePart = fn.optNonNullString("name")
                                 if (namePart.isNotBlank()) {
                                     acc.name += namePart
                                 }
@@ -153,7 +152,7 @@ class OpenAiStreamingClient(
                                         )
                                     )
                                 }
-                                val argChunk = fn.optString("arguments", "")
+                                val argChunk = fn.optNonNullString("arguments")
                                 if (argChunk.isNotEmpty()) {
                                     acc.argsBuffer.append(argChunk)
                                     val effectiveId = acc.id.ifBlank { "call_$idx" }
@@ -291,22 +290,22 @@ class OpenAiStreamingClient(
     ) {
         for (i in 0 until incoming.length()) {
             val chunk = incoming.optJSONObject(i) ?: continue
-            val type = chunk.optString("type", "")
-            val id = chunk.optString("id", "")
+            val type = chunk.optNonNullString("type")
+            val id = chunk.optNonNullString("id")
             val index = chunk.optInt("index", -1)
             val prev = acc.lastOrNull()
             val canMerge = prev != null &&
-                prev.optString("type", "") == type &&
-                prev.optString("id", "") == id &&
+                prev.optNonNullString("type") == type &&
+                prev.optNonNullString("id") == id &&
                 prev.optInt("index", -1) == index
 
             if (canMerge && type == "reasoning.text") {
-                val mergedText = prev!!.optString("text", "") + chunk.optString("text", "")
+                val mergedText = prev!!.optNonNullString("text") + chunk.optNonNullString("text")
                 prev.put("text", mergedText)
-                val sig = chunk.optString("signature", "")
+                val sig = chunk.optNonNullString("signature")
                 if (sig.isNotBlank()) prev.put("signature", sig)
             } else if (canMerge && type == "reasoning.summary") {
-                val mergedSummary = prev!!.optString("summary", "") + chunk.optString("summary", "")
+                val mergedSummary = prev!!.optNonNullString("summary") + chunk.optNonNullString("summary")
                 prev.put("summary", mergedSummary)
             } else {
                 // Keep encrypted blobs and distinct items completely intact (deep copy)

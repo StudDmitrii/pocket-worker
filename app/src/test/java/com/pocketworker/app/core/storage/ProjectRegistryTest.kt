@@ -171,4 +171,44 @@ class ProjectRegistryTest {
         assertEquals("https://github.com/test/legacy.git", repos.first().remoteUrl)
         assertTrue(File(repos.first().directoryPath, ".git").exists())
     }
+
+    @Test
+    fun `pending newly added project and repo ids track creation and clear on markSeen or delete`() {
+        val project = registry.createProject("Animated App")
+        assertTrue(project.id in registry.getPendingNewProjectIds())
+
+        registry.markProjectSeen(project.id)
+        assertFalse(project.id in registry.getPendingNewProjectIds())
+
+        val (repoId, repoDir) = registry.allocateRepositoryDir(project.id, "web")
+        repoDir.mkdirs()
+        registry.registerRepository(
+            RepoEntry(
+                id = repoId,
+                projectId = project.id,
+                name = "web",
+                directoryPath = repoDir.absolutePath,
+                createdAt = 100L
+            )
+        )
+        assertTrue(repoId in registry.getPendingNewRepoIds())
+
+        registry.markRepoSeen(repoId)
+        assertFalse(repoId in registry.getPendingNewRepoIds())
+
+        val (repo2Id, repo2Dir) = registry.allocateRepositoryDir(project.id, "api")
+        repo2Dir.mkdirs()
+        registry.registerRepository(
+            RepoEntry(
+                id = repo2Id,
+                projectId = project.id,
+                name = "api",
+                directoryPath = repo2Dir.absolutePath,
+                createdAt = 200L
+            )
+        )
+        assertTrue(repo2Id in registry.getPendingNewRepoIds())
+        registry.deleteRepository(project.id, repo2Id, deleteFilesOnDisk = true)
+        assertFalse(repo2Id in registry.getPendingNewRepoIds())
+    }
 }

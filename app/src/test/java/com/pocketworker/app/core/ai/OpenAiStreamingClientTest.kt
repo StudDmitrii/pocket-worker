@@ -160,4 +160,51 @@ class OpenAiStreamingClientTest {
         assertEquals("Думаю... вызову инструмент", replayedDetails.getJSONObject(0).getString("text"))
         assertEquals("ENC_SIG_ABC", replayedDetails.getJSONObject(1).getString("data"))
     }
+
+    @Test
+    fun `ignores explicit JSON null fields in chunked tool_calls and reasoning_details`() = runTest {
+        val nullObj = JSONObject("""{"id":null,"name":null,"arguments":null,"text":"ok"}""")
+        assertEquals("", nullObj.optNonNullString("id"))
+        assertEquals("", nullObj.optNonNullString("name"))
+        assertEquals("", nullObj.optNonNullString("arguments"))
+        assertEquals("ok", nullObj.optNonNullString("text"))
+
+        val sseLines = listOf(
+            """data: {"choices":[{"index":0,"delta":{"content":null,"reasoning_details":[{"type":"reasoning.text","id":"r1","index":0,"text":"Шаг 1","signature":null}]},"finish_reason":null}]}""",
+            """data: {"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","id":"r1","index":0,"text":null,"signature":"sig_ok"}]},"finish_reason":null}]}""",
+            """data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_null_safe","type":"function","function":{"name":"git_exec","arguments":""}}]},"finish_reason":null}]}""",
+            """data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":null,"function":{"name":null,"arguments":"{\"command\":\"status\"}"}}]},"finish_reason":null}]}""",
+            """data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":null,"arguments":null}}]},"finish_reason":"tool_calls"}]}""",
+            "data: [DONE]"
+        )
+
+        val transport = object : SseHttpTransport {
+            override suspend fun postStream(
+                url: String,
+                headers: Map<String, String>,
+                bodyJson: String,
+                proxy: AiProxyConfig?,
+                onLine: suspend (String) -> Unit
+            ) {
+                sseLines.forEach { onLine(it) }
+            }
+        }
+
+        val client = OpenAiStreamingClient.forOpenRouter(transport = transport)
+        val events = client.streamChat(
+            LlmRequest("baidu/ernie-5.5-flash-preview:free", "sys", listOf(LlmMessage.User("status")), emptyList(), "sk-or-test")
+        ).toList()
+
+        assertTrue(events.filterIsInstance<LlmStreamEvent.TextDelta>().isEmpty())
+        val completed = events.filterIsInstance<LlmStreamEvent.ToolUseCompleted>().single()
+        assertEquals("call_null_safe", completed.call.id)
+        assertEquals("git_exec", completed.call.name)
+        assertEquals("status", JSONObject(completed.call.argumentsJson).getString("command"))
+
+        val rdEvent = events.filterIsInstance<LlmStreamEvent.ReasoningDetailsCaptured>().single()
+        val rdArr = org.json.JSONArray(rdEvent.reasoningDetailsJson)
+        assertEquals(1, rdArr.length())
+        assertEquals("Шаг 1", rdArr.getJSONObject(0).getString("text"))
+        assertEquals("sig_ok", rdArr.getJSONObject(0).getString("signature"))
+    }
 }

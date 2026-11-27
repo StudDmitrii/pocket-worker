@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.AiProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -54,7 +55,7 @@ class GoogleAiStudioStreamingClient(
                 val inlineError = chunk.optJSONObject("error")
                 if (inlineError != null) {
                     val code = inlineError.optInt("code", 0).takeIf { it > 0 }
-                    val msg = inlineError.optString("message", "").ifBlank { "Ошибка Google AI Studio." }
+                    val msg = inlineError.optNonNullString("message").ifBlank { AppLocale.current.llmErrGoogleAiStudio }
                     emit(LlmStreamEvent.Error(message = msg, statusCode = code))
                     return@postStream
                 }
@@ -62,8 +63,8 @@ class GoogleAiStudioStreamingClient(
                 val candidates = chunk.optJSONArray("candidates") ?: return@postStream
                 val candidate = candidates.optJSONObject(0) ?: return@postStream
 
-                val fr = candidate.optString("finishReason", "")
-                if (fr.isNotBlank() && fr != "null") {
+                val fr = candidate.optNonNullString("finishReason")
+                if (fr.isNotBlank()) {
                     finishReason = fr
                 }
 
@@ -71,19 +72,19 @@ class GoogleAiStudioStreamingClient(
                 for (i in 0 until parts.length()) {
                     val part = parts.optJSONObject(i) ?: continue
                     val isThought = part.optBoolean("thought", false)
-                    val hasSignature = part.optString("thoughtSignature", "").isNotBlank()
+                    val hasSignature = part.optNonNullString("thoughtSignature").isNotBlank()
                     if (isThought || hasSignature) {
                         hasThoughtOrSignature = true
                     }
 
                     appendMergedRawPart(capturedParts, part)
 
-                    if (part.has("functionCall")) {
+                    if (part.has("functionCall") && !part.isNull("functionCall")) {
                         val fc = part.optJSONObject("functionCall")
                         if (fc != null) {
-                            val name = fc.optString("name", "")
+                            val name = fc.optNonNullString("name")
                             if (name.isNotBlank()) {
-                                val nativeId = fc.optString("id", "").takeIf { it.isNotBlank() }
+                                val nativeId = fc.optNonNullString("id").takeIf { it.isNotBlank() }
                                 val callId = nativeId
                                     ?: "$SYNTHETIC_CALL_PREFIX${++callCounter}_${UUID.randomUUID().toString().take(8)}"
                                 val argsJson = fc.optJSONObject("args")?.toString() ?: "{}"
@@ -100,8 +101,8 @@ class GoogleAiStudioStreamingClient(
                                 )
                             }
                         }
-                    } else if (!isThought && part.has("text")) {
-                        val text = part.optString("text", "")
+                    } else if (!isThought && part.has("text") && !part.isNull("text")) {
+                        val text = part.optNonNullString("text")
                         if (text.isNotEmpty()) {
                             emit(LlmStreamEvent.TextDelta(text))
                         }
@@ -261,13 +262,13 @@ class GoogleAiStudioStreamingClient(
         val prev = acc.lastOrNull()
         val canMerge = prev != null &&
             !prev.has("functionCall") &&
-            prev.has("text") &&
+            prev.has("text") && !prev.isNull("text") &&
             prev.optBoolean("thought", false) == isThought &&
-            prev.optString("thoughtSignature", "").isEmpty()
+            prev.optNonNullString("thoughtSignature").isEmpty()
 
         if (canMerge && prev != null) {
-            prev.put("text", prev.optString("text", "") + copy.optString("text", ""))
-            val sig = copy.optString("thoughtSignature", "")
+            prev.put("text", prev.optNonNullString("text") + copy.optNonNullString("text"))
+            val sig = copy.optNonNullString("thoughtSignature")
             if (sig.isNotBlank()) {
                 prev.put("thoughtSignature", sig)
             }

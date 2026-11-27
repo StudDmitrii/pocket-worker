@@ -153,7 +153,7 @@ class AiChatViewModelTest {
     fun `shows clear error notice when API key is missing or proxy URL is invalid, and passes proxy when valid`() = runTest(testDispatcher) {
         val prefsStore = InMemoryAppPreferencesStore(
             AppPreferences(
-                aiSettings = AiAgentSettings(provider = AiProvider.OPENROUTER, modelName = "google/gemini-4-neon")
+                aiSettings = AiAgentSettings(provider = AiProvider.OPENROUTER, modelName = "particle-ai/particle-1:free")
             )
         )
         val capturedRequests = mutableListOf<LlmRequest>()
@@ -182,7 +182,7 @@ class AiChatViewModelTest {
         // Enable proxy with invalid URL -> blocks cleanly before sending
         harness.credentialStore.saveAiApiKey(AiProvider.OPENROUTER, "sk-or-v1-abc")
         prefsStore.updateAiSettings(
-            AiAgentSettings(provider = AiProvider.OPENROUTER, modelName = "google/gemini-4-neon", proxyEnabled = true)
+            AiAgentSettings(provider = AiProvider.OPENROUTER, modelName = "particle-ai/particle-1:free", proxyEnabled = true)
         )
         harness.credentialStore.saveAiProxyUrl("ftp://bad-proxy")
         advanceUntilIdle()

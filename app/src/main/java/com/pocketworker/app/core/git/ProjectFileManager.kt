@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.git
 
+import com.pocketworker.app.core.i18n.AppLocale
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -25,7 +26,7 @@ class ProjectFileManager {
         val isSameOrChild = candidatePath == rootPath ||
             candidatePath.startsWith(rootPath + File.separator)
         if (!isSameOrChild) {
-            throw SecurityException("Путь выходит за пределы проекта: $relativePath")
+            throw SecurityException(AppLocale.current.fmErrOutsideProject(relativePath))
         }
         return candidate
     }
@@ -88,7 +89,7 @@ class ProjectFileManager {
     ): FileReadResult {
         val file = resolveSafe(projectRoot, relativePath)
         if (!file.exists() || !file.isFile) {
-            throw IOException("Файл не найден: $relativePath")
+            throw IOException(AppLocale.current.fmErrFileNotFound(relativePath))
         }
         val size = file.length()
         if (size > maxBytes) {
@@ -107,7 +108,7 @@ class ProjectFileManager {
     fun writeTextFile(projectRoot: File, relativePath: String, content: String) {
         val file = resolveSafe(projectRoot, relativePath)
         if (file.isDirectory) {
-            throw IOException("Нельзя записать текст в директорию: $relativePath")
+            throw IOException(AppLocale.current.fmErrWriteToDirectory(relativePath))
         }
         file.parentFile?.mkdirs()
         file.writeText(content, StandardCharsets.UTF_8)
@@ -116,7 +117,7 @@ class ProjectFileManager {
     fun createFile(projectRoot: File, relativePath: String, initialContent: String = "") {
         val file = resolveSafe(projectRoot, relativePath)
         if (file.exists()) {
-            throw IOException("Файл или папка уже существует: $relativePath")
+            throw IOException(AppLocale.current.fmErrAlreadyExists(relativePath))
         }
         file.parentFile?.mkdirs()
         file.writeText(initialContent, StandardCharsets.UTF_8)
@@ -125,21 +126,22 @@ class ProjectFileManager {
     fun createDirectory(projectRoot: File, relativePath: String) {
         val dir = resolveSafe(projectRoot, relativePath)
         if (dir.exists()) {
-            throw IOException("Папка или файл уже существует: $relativePath")
+            throw IOException(AppLocale.current.fmErrAlreadyExists(relativePath))
         }
         if (!dir.mkdirs()) {
-            throw IOException("Не удалось создать папку: $relativePath")
+            throw IOException(AppLocale.current.fmErrCreateDirFailed(relativePath))
         }
     }
 
     fun renameEntry(projectRoot: File, relativePath: String, newName: String): String {
+        val s = AppLocale.current
         val cleanNewName = newName.trim()
         require(cleanNewName.isNotEmpty() && !cleanNewName.contains('/') && !cleanNewName.contains('\\')) {
-            "Некорректное имя: $newName"
+            s.fmErrInvalidName(newName)
         }
         val source = resolveSafe(projectRoot, relativePath)
         if (!source.exists()) {
-            throw IOException("Элемент не найден: $relativePath")
+            throw IOException(s.fmErrEntryNotFound(relativePath))
         }
         val parent = source.parentFile ?: projectRoot.canonicalFile
         val target = resolveSafe(
@@ -148,24 +150,25 @@ class ProjectFileManager {
                 .let { if (it.isEmpty()) cleanNewName else "$it/$cleanNewName" }
         )
         if (target.exists()) {
-            throw IOException("Элемент с именем '$cleanNewName' уже существует")
+            throw IOException(s.fmErrTargetExists(cleanNewName))
         }
         if (!source.renameTo(target)) {
-            throw IOException("Не удалось переименовать '$relativePath'")
+            throw IOException(s.fmErrRenameFailed(relativePath))
         }
         return target.canonicalFile.relativeTo(projectRoot.canonicalFile).invariantSeparatorsPath
     }
 
     fun deleteEntry(projectRoot: File, relativePath: String) {
+        val s = AppLocale.current
         val target = resolveSafe(projectRoot, relativePath)
         if (target == projectRoot.canonicalFile) {
-            throw SecurityException("Нельзя удалить корень проекта через файловый менеджер")
+            throw SecurityException(s.fmErrDeleteRoot)
         }
         if (!target.exists()) {
-            throw IOException("Элемент не найден: $relativePath")
+            throw IOException(s.fmErrEntryNotFound(relativePath))
         }
         if (!target.deleteRecursively()) {
-            throw IOException("Не удалось удалить: $relativePath")
+            throw IOException(s.fmErrDeleteFailed(relativePath))
         }
     }
 

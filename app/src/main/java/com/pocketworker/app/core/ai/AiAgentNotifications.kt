@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import com.pocketworker.app.MainActivity
 import com.pocketworker.app.PocketWorkerApplication
 import com.pocketworker.app.R
+import com.pocketworker.app.core.i18n.AppLocale
 
 data class ActiveAgentRun(
     val chatId: String,
@@ -85,7 +86,7 @@ class AiAgentBackgroundCoordinator(
     }
 
     fun onAgentStarted(chatId: String, chatTitle: String, statusText: String) {
-        val cleanStatus = statusText.ifBlank { "Думает..." }
+        val cleanStatus = statusText.ifBlank { AppLocale.current.aiThinking }
         val showNow: Boolean = synchronized(lock) {
             activeRun = ActiveAgentRun(chatId, chatTitle, cleanStatus)
             !isAppInForeground
@@ -97,7 +98,7 @@ class AiAgentBackgroundCoordinator(
     }
 
     fun onAgentStatusChanged(chatId: String, chatTitle: String, statusText: String) {
-        val cleanStatus = statusText.ifBlank { "Думает..." }
+        val cleanStatus = statusText.ifBlank { AppLocale.current.aiThinking }
         val showNow: Boolean = synchronized(lock) {
             val prev = activeRun
             if (prev != null && prev.chatId == chatId && prev.statusText == cleanStatus && prev.chatTitle == chatTitle) {
@@ -127,17 +128,18 @@ class AiAgentBackgroundCoordinator(
         presenter.hideOngoing()
 
         if (shouldNotifyFinished) {
+            val s = AppLocale.current
             val title = if (hadError) {
-                "Агент завершил задачу с ошибкой"
+                s.notifFinishedErrorTitle
             } else {
-                "Агент закончил задачу"
+                s.notifFinishedSuccessTitle
             }
             val compactPreview = previewText.replace('\n', ' ').trim().take(120)
             val contentText = when {
                 compactPreview.isNotBlank() && chatTitle.isNotBlank() -> "$chatTitle: $compactPreview"
                 compactPreview.isNotBlank() -> compactPreview
-                chatTitle.isNotBlank() -> "Чат «$chatTitle» — нажмите, чтобы открыть"
-                else -> "Нажмите, чтобы открыть чат"
+                chatTitle.isNotBlank() -> s.notifOpenNamedChat(chatTitle)
+                else -> s.notifOpenChat
             }
             presenter.showFinished(
                 chatId = chatId,
@@ -198,22 +200,23 @@ object AiAgentNotificationConstants {
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val s = AppLocale.current
 
         val progressChannel = NotificationChannel(
             CHANNEL_PROGRESS_ID,
-            "Работа ИИ-агента",
+            s.notifProgressChannelName,
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Показывает текущее действие ИИ-агента, пока приложение свёрнуто"
+            description = s.notifProgressChannelDesc
             setShowBadge(false)
         }
 
         val finishedChannel = NotificationChannel(
             CHANNEL_FINISHED_ID,
-            "Завершение задач ИИ-агента",
+            s.notifFinishedChannelName,
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Уведомляет, когда ИИ-агент закончил задачу в фоне"
+            description = s.notifFinishedChannelDesc
             enableVibration(true)
         }
 
@@ -239,7 +242,8 @@ object AiAgentNotificationConstants {
         statusText: String
     ): Notification {
         ensureChannels(context)
-        val title = if (chatTitle.isNotBlank()) "ИИ-агент • $chatTitle" else "ИИ-агент работает"
+        val s = AppLocale.current
+        val title = if (chatTitle.isNotBlank()) s.notifOngoingNamedTitle(chatTitle) else s.notifOngoingDefaultTitle
         val pendingIntent = createOpenChatPendingIntent(
             context = context,
             chatId = chatId,
@@ -368,7 +372,7 @@ class AiAgentForegroundService : Service() {
             ?: run?.chatTitle.orEmpty()
         val statusText = intent?.getStringExtra(AiAgentNotificationConstants.EXTRA_SERVICE_STATUS_TEXT)
             ?: run?.statusText
-            ?: "Думает..."
+            ?: AppLocale.current.aiThinking
 
         val notification = AiAgentNotificationConstants.buildOngoingNotification(
             context = this,

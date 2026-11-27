@@ -167,6 +167,7 @@ fun AppNavHost(container: AppContainer) {
                 HomeScreen(
                     viewModel = homeViewModel,
                     animatedBackgroundEnabled = appPreferences.animatedBackgroundEnabled,
+                    isVisibleToUser = !isAiChatOpen && !showOnboardingPdf,
                     onOpenProject = { projectId ->
                         navController.safeNavigate(backStackEntry, Routes.project(projectId))
                     },
@@ -187,7 +188,8 @@ fun AppNavHost(container: AppContainer) {
                         gitEngine = container.gitEngine,
                         registry = container.projectRegistry,
                         credentialStore = container.credentialStore,
-                        groupDiscoveryService = container.groupDiscoveryService
+                        groupDiscoveryService = container.groupDiscoveryService,
+                        oauthManager = container.oauthManager
                     )
                 )
                 LaunchedEffect(workspaceMutationVersion) {
@@ -207,6 +209,7 @@ fun AppNavHost(container: AppContainer) {
                 ProjectDetailScreen(
                     viewModel = detailViewModel,
                     animatedBackgroundEnabled = appPreferences.animatedBackgroundEnabled,
+                    isVisibleToUser = !isAiChatOpen && !showOnboardingPdf,
                     onBack = { navController.safePopBackStack(backStackEntry) },
                     onOpenRepo = { repoId ->
                         navController.safeNavigate(backStackEntry, Routes.repoWorkspace(projectId, repoId))
@@ -233,7 +236,9 @@ fun AppNavHost(container: AppContainer) {
                         gitEngine = container.gitEngine,
                         fileManager = container.fileManager,
                         registry = container.projectRegistry,
-                        credentialStore = container.credentialStore
+                        credentialStore = container.credentialStore,
+                        syntaxCheckEngine = container.syntaxCheckEngine,
+                        oauthManager = container.oauthManager
                     )
                 )
                 LaunchedEffect(workspaceMutationVersion) {
@@ -319,7 +324,8 @@ fun AppNavHost(container: AppContainer) {
                         registry = container.projectRegistry,
                         gitEngine = container.gitEngine,
                         localModelManager = container.localModelManager,
-                        onLocalProviderDeselected = { container.localGemmaClient.releaseEngine() }
+                        onLocalProviderDeselected = { container.localGemmaClient.releaseEngine() },
+                        oauthManager = container.oauthManager
                     )
                 )
                 val settingsState by settingsViewModel.uiState.collectAsState()

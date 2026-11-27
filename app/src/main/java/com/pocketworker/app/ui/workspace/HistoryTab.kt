@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.GitCommit
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.formatShortTimestamp
 
 @Composable
@@ -54,11 +55,12 @@ fun HistoryTab(
     onCommitClick: (String) -> Unit,
     onLoadMore: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val status = state.gitStatus
     if (status == null || !status.isGitRepo) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
-                text = "Git не инициализирован в этом проекте",
+                text = s.historyNoGit,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -83,7 +85,7 @@ fun HistoryTab(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Ветка истории:",
+                    text = s.historyBranchLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -117,7 +119,7 @@ fun HistoryTab(
                                         text = if (branch.isRemote) {
                                             "remote: ${branch.name}"
                                         } else if (branch.isCurrent) {
-                                            "${branch.name} (текущая)"
+                                            s.historyBranchCurrent(branch.name)
                                         } else {
                                             branch.name
                                         },
@@ -155,11 +157,11 @@ fun HistoryTab(
                         modifier = Modifier.size(48.dp)
                     )
                     Text(
-                        text = "История коммитов пуста",
+                        text = s.historyEmptyTitle,
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "Сделайте первый коммит во вкладке Git, и здесь появится история выбранной ветки.",
+                        text = s.historyEmptySubtitle,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -185,7 +187,7 @@ fun HistoryTab(
                             contentAlignment = Alignment.Center
                         ) {
                             TextButton(onClick = onLoadMore) {
-                                Text("Загрузить более ранние коммиты")
+                                Text(s.historyLoadOlder)
                             }
                         }
                     }

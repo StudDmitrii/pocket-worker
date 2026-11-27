@@ -38,8 +38,6 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderCopy
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.RemoveDone
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Sell
@@ -76,17 +74,29 @@ import com.pocketworker.app.core.git.GitRemote
 import com.pocketworker.app.core.git.GitStashEntry
 import com.pocketworker.app.core.git.GitStatusSummary
 import com.pocketworker.app.core.git.GitTag
+import com.pocketworker.app.core.i18n.AppStrings
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.appSwitchColors
 import com.pocketworker.app.ui.common.formatShortTimestamp
 
-enum class GitActionSubmenu(val title: String) {
-    ROOT("Действия Git"),
-    COMMIT("Коммит (Commit)"),
-    CHANGES("Изменения (Changes)"),
-    PULL_PUSH("Синхронизация (Pull, Push)"),
-    REMOTE("Удалённые (Remote)"),
-    STASH("Отложенные (Stash)"),
-    TAGS("Теги (Tags)")
+enum class GitActionSubmenu {
+    ROOT,
+    COMMIT,
+    CHANGES,
+    PULL_PUSH,
+    REMOTE,
+    STASH,
+    TAGS;
+
+    fun localizedTitle(s: AppStrings): String = when (this) {
+        ROOT -> s.gitSubmenuRoot
+        COMMIT -> s.gitSubmenuCommit
+        CHANGES -> s.gitSubmenuChanges
+        PULL_PUSH -> s.gitSubmenuPullPush
+        REMOTE -> s.gitSubmenuRemote
+        STASH -> s.gitSubmenuStash
+        TAGS -> s.gitSubmenuTags
+    }
 }
 
 /**
@@ -127,10 +137,9 @@ fun GitActionSheet(
     onCreateTagClick: () -> Unit,
     onDeleteTagClick: (GitTag) -> Unit,
     onPushTags: (remote: String) -> Unit,
-    onShowGitOutput: () -> Unit,
-    onOpenCredentialsDialog: () -> Unit,
-    onOpenAuthorDialog: () -> Unit
+    onShowGitOutput: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var currentMenu by remember { mutableStateOf(GitActionSubmenu.ROOT) }
 
@@ -161,7 +170,7 @@ fun GitActionSheet(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Назад"
+                            contentDescription = s.commonBack
                         )
                     }
                     Spacer(modifier = Modifier.width(4.dp))
@@ -169,14 +178,14 @@ fun GitActionSheet(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = currentMenu.title,
+                        text = currentMenu.localizedTitle(s),
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = buildString {
-                            append("Ветка: ${status.currentBranch ?: "HEAD"}")
+                            append(s.gitBranchPrefix(status.currentBranch ?: "HEAD"))
                             if (primaryRemote != null) append(" • $primaryRemote")
                         },
                         style = MaterialTheme.typography.labelMedium,
@@ -190,7 +199,7 @@ fun GitActionSheet(
                     onClick = onDismiss,
                     modifier = Modifier.size(44.dp)
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Закрыть")
+                    Icon(Icons.Rounded.Close, contentDescription = s.commonClose)
                 }
             }
 
@@ -288,12 +297,16 @@ fun GitActionSheet(
                                         Spacer(modifier = Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Вид изменений: дерево",
+                                                text = s.gitViewAsTreeTitle,
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 fontWeight = FontWeight.Medium
                                             )
                                             Text(
-                                                text = if (state.viewChangesAsTree) "Группировка по папкам" else "Плоский список файлов",
+                                                text = if (state.viewChangesAsTree) {
+                                                    s.gitViewAsTreeSubtitleOn
+                                                } else {
+                                                    s.gitViewAsTreeSubtitleOff
+                                                },
                                                 style = MaterialTheme.typography.labelMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -350,7 +363,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Cloud,
                                     title = "Remote",
-                                    subtitle = "Управление подключениями Git",
+                                    subtitle = s.gitMenuRemoteSubtitle,
                                     badgeText = state.remotes.size.takeIf { it > 0 }?.toString(),
                                     trailingChevron = true,
                                     onClick = { currentMenu = GitActionSubmenu.REMOTE }
@@ -361,7 +374,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Archive,
                                     title = "Stash",
-                                    subtitle = "Отложить изменения, Pop, Apply, Drop",
+                                    subtitle = s.gitMenuStashSubtitle,
                                     badgeText = state.stashes.size.takeIf { it > 0 }?.toString(),
                                     trailingChevron = true,
                                     onClick = { currentMenu = GitActionSubmenu.STASH }
@@ -372,7 +385,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Sell,
                                     title = "Tags",
-                                    subtitle = "Создать тег, удалить, отправить теги",
+                                    subtitle = s.gitMenuTagsSubtitle,
                                     badgeText = state.tags.size.takeIf { it > 0 }?.toString(),
                                     trailingChevron = true,
                                     onClick = { currentMenu = GitActionSubmenu.TAGS }
@@ -390,39 +403,11 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Terminal,
                                     title = "Show Git Output",
-                                    subtitle = "Журнал выполненных Git-команд",
+                                    subtitle = s.gitMenuOutputSubtitle,
                                     badgeText = state.gitOutputLogs.size.takeIf { it > 0 }?.toString(),
                                     onClick = {
                                         onDismiss()
                                         onShowGitOutput()
-                                    }
-                                )
-                            }
-
-                            item(key = "credentials") {
-                                GitMenuActionRow(
-                                    icon = Icons.Rounded.Key,
-                                    title = "Токен доступа (PAT / пароль)",
-                                    subtitle = when {
-                                        state.repoCredentials != null -> "Задан токен репозитория"
-                                        state.hasFallbackCredentials -> "Используется токен проекта / по умолчанию"
-                                        else -> "Не задан"
-                                    },
-                                    onClick = {
-                                        onDismiss()
-                                        onOpenCredentialsDialog()
-                                    }
-                                )
-                            }
-
-                            item(key = "author") {
-                                GitMenuActionRow(
-                                    icon = Icons.Rounded.Person,
-                                    title = "Автор коммитов",
-                                    subtitle = "${status.authorName} <${status.authorEmail}>",
-                                    onClick = {
-                                        onDismiss()
-                                        onOpenAuthorDialog()
                                     }
                                 )
                             }
@@ -432,11 +417,11 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Check,
-                                    title = "Commit (подготовленные)",
+                                    title = s.gitCommitStaged,
                                     subtitle = if (canCommitStaged) {
-                                        "Создать коммит из индекса (${status.stagedChanges.size})"
+                                        s.gitCommitStagedSubtitleReady(status.stagedChanges.size)
                                     } else {
-                                        "Введите сообщение и подготовьте файлы"
+                                        s.gitCommitStagedSubtitleHint
                                     },
                                     enabled = canCommitStaged,
                                     onClick = {
@@ -449,7 +434,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.DoneAll,
                                     title = "Stage All & Commit",
-                                    subtitle = "Индексировать все изменения и создать коммит",
+                                    subtitle = s.gitCommitAllSubtitle,
                                     enabled = canStageAndCommit,
                                     onClick = {
                                         onDismiss()
@@ -461,7 +446,11 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudUpload,
                                     title = "Commit & Push",
-                                    subtitle = if (hasRemote) "Создать коммит и сразу отправить в $primaryRemote" else "Нет подключённого remote",
+                                    subtitle = if (primaryRemote != null) {
+                                        s.gitCommitPushSubtitleReady(primaryRemote)
+                                    } else {
+                                        s.gitNoRemoteConnected
+                                    },
                                     enabled = canCommitStaged && hasRemote,
                                     onClick = {
                                         onDismiss()
@@ -473,9 +462,9 @@ fun GitActionSheet(
                                 item {
                                     GitMenuActionRow(
                                         icon = Icons.Rounded.Edit,
-                                        title = if (amendCommit) "Выключить режим Amend" else "Включить режим Amend",
-                                        subtitle = "Дополнить последний коммит вместо создания нового",
-                                        badgeText = if (amendCommit) "ВКЛ" else null,
+                                        title = if (amendCommit) s.gitAmendToggleOn else s.gitAmendToggleOff,
+                                        subtitle = s.gitAmendToggleSubtitle,
+                                        badgeText = if (amendCommit) s.gitOnBadge else null,
                                         onClick = {
                                             onToggleAmend()
                                             onDismiss()
@@ -490,7 +479,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
                                     title = "Stage All Changes",
-                                    subtitle = "Добавить все изменения в индекс (${status.unstagedChanges.size})",
+                                    subtitle = s.gitStageAllSubtitle(status.unstagedChanges.size),
                                     enabled = status.unstagedChanges.isNotEmpty(),
                                     onClick = {
                                         onDismiss()
@@ -502,7 +491,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.RemoveDone,
                                     title = "Unstage All Changes",
-                                    subtitle = "Убрать все файлы из индекса (${status.stagedChanges.size})",
+                                    subtitle = s.gitUnstageAllSubtitle(status.stagedChanges.size),
                                     enabled = status.stagedChanges.isNotEmpty(),
                                     onClick = {
                                         onDismiss()
@@ -514,7 +503,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Restore,
                                     title = "Discard All Changes",
-                                    subtitle = "Откатить все несохранённые изменения и удалить untracked файлы",
+                                    subtitle = s.gitDiscardAllSubtitle,
                                     isDestructive = true,
                                     enabled = hasChanges,
                                     onClick = {
@@ -530,7 +519,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Sync,
                                     title = "Sync (Pull + Push)",
-                                    subtitle = "Сначала получить изменения, затем отправить свои",
+                                    subtitle = s.gitSyncSubtitle,
                                     enabled = hasRemote,
                                     onClick = {
                                         onDismiss()
@@ -542,7 +531,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudDownload,
                                     title = "Pull",
-                                    subtitle = "Загрузить и объединить изменения из ${primaryRemote ?: "remote"}",
+                                    subtitle = s.gitPullSubtitle(primaryRemote ?: "remote"),
                                     enabled = hasRemote,
                                     onClick = {
                                         onDismiss()
@@ -554,7 +543,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudDownload,
                                     title = "Pull (Rebase)",
-                                    subtitle = "Перебазировать локальные коммиты поверх удалённых",
+                                    subtitle = s.gitPullRebaseSubtitle,
                                     enabled = hasRemote && !status.isUnborn,
                                     onClick = {
                                         onDismiss()
@@ -567,7 +556,7 @@ fun GitActionSheet(
                                     GitMenuActionRow(
                                         icon = Icons.Rounded.CloudDownload,
                                         title = "Pull from...",
-                                        subtitle = "Выбрать удалённый репозиторий для Pull",
+                                        subtitle = s.gitPullFromSubtitle,
                                         enabled = hasRemote,
                                         onClick = {
                                             onDismiss()
@@ -580,7 +569,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudUpload,
                                     title = "Push",
-                                    subtitle = "Отправить коммиты в ${primaryRemote ?: "remote"}",
+                                    subtitle = s.gitPushSubtitle(primaryRemote ?: "remote"),
                                     enabled = hasRemote && !status.isUnborn,
                                     onClick = {
                                         onDismiss()
@@ -593,7 +582,7 @@ fun GitActionSheet(
                                     GitMenuActionRow(
                                         icon = Icons.Rounded.CloudUpload,
                                         title = "Push to...",
-                                        subtitle = "Выбрать удалённый репозиторий для Push",
+                                        subtitle = s.gitPushToSubtitle,
                                         enabled = hasRemote && !status.isUnborn,
                                         onClick = {
                                             onDismiss()
@@ -606,7 +595,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.WarningAmber,
                                     title = "Push (Force)",
-                                    subtitle = "Принудительно перезаписать удалённую ветку",
+                                    subtitle = s.gitForcePushSubtitle,
                                     isDestructive = true,
                                     enabled = hasRemote && !status.isUnborn,
                                     onClick = {
@@ -619,7 +608,7 @@ fun GitActionSheet(
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudSync,
                                     title = "Fetch",
-                                    subtitle = "Обновить информацию об удалённых ветках без слияния",
+                                    subtitle = s.gitFetchSubtitle,
                                     enabled = hasRemote,
                                     onClick = {
                                         onDismiss()
@@ -633,8 +622,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Add,
-                                    title = "Добавить remote...",
-                                    subtitle = "Привязать новый удалённый репозиторий по URL",
+                                    title = s.gitAddRemoteTitle,
+                                    subtitle = s.gitAddRemoteSubtitle,
                                     onClick = {
                                         onDismiss()
                                         onAddRemoteClick()
@@ -644,7 +633,7 @@ fun GitActionSheet(
                             if (state.remotes.isEmpty()) {
                                 item {
                                     Text(
-                                        text = "Удалённые репозитории не настроены.",
+                                        text = s.gitNoRemotesConfigured,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(vertical = 8.dp)
@@ -684,7 +673,7 @@ fun GitActionSheet(
                                                     },
                                                     modifier = Modifier.size(40.dp)
                                                 ) {
-                                                    Icon(Icons.Rounded.Edit, contentDescription = "Изменить")
+                                                    Icon(Icons.Rounded.Edit, contentDescription = s.commonEdit)
                                                 }
                                                 IconButton(
                                                     onClick = {
@@ -693,7 +682,7 @@ fun GitActionSheet(
                                                     },
                                                     modifier = Modifier.size(40.dp)
                                                 ) {
-                                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить")
+                                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = s.commonDelete)
                                                 }
                                             }
                                             Text(
@@ -733,8 +722,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Archive,
-                                    title = "Stash (включая untracked)...",
-                                    subtitle = "Отложить все текущие изменения и новые файлы",
+                                    title = s.gitStashIncludeUntrackedTitle,
+                                    subtitle = s.gitStashIncludeUntrackedSubtitle,
                                     enabled = !status.isUnborn && hasChanges,
                                     onClick = {
                                         onDismiss()
@@ -745,8 +734,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Archive,
-                                    title = "Stash (только отслеживаемые)...",
-                                    subtitle = "Не трогать новые (untracked) файлы",
+                                    title = s.gitStashTrackedOnlyTitle,
+                                    subtitle = s.gitStashTrackedOnlySubtitle,
                                     enabled = !status.isUnborn && hasChanges,
                                     onClick = {
                                         onDismiss()
@@ -757,8 +746,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Unarchive,
-                                    title = "Pop последний Stash",
-                                    subtitle = "Применить stash@{0} и удалить его из списка",
+                                    title = s.gitStashPopLatestTitle,
+                                    subtitle = s.gitStashPopLatestSubtitle,
                                     enabled = hasStashes,
                                     onClick = {
                                         onDismiss()
@@ -769,8 +758,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Unarchive,
-                                    title = "Apply последний Stash",
-                                    subtitle = "Применить stash@{0}, оставив копию в списке",
+                                    title = s.gitStashApplyLatestTitle,
+                                    subtitle = s.gitStashApplyLatestSubtitle,
                                     enabled = hasStashes,
                                     onClick = {
                                         onDismiss()
@@ -782,8 +771,8 @@ fun GitActionSheet(
                                 item {
                                     GitMenuActionRow(
                                         icon = Icons.Rounded.DeleteOutline,
-                                        title = "Очистить все Stash",
-                                        subtitle = "Удалить все отложенные записи (${state.stashes.size})",
+                                        title = s.gitStashClearAllTitle,
+                                        subtitle = s.gitStashClearAllSubtitle(state.stashes.size),
                                         isDestructive = true,
                                         onClick = {
                                             onDismiss()
@@ -793,7 +782,7 @@ fun GitActionSheet(
                                 }
                                 item {
                                     Text(
-                                        text = "Сохранённые Stash (${state.stashes.size})",
+                                        text = s.gitStashSavedHeader(state.stashes.size),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(top = 6.dp)
@@ -853,8 +842,8 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.Add,
-                                    title = "Создать тег...",
-                                    subtitle = "Отметить текущий коммит (${status.currentBranch ?: "HEAD"})",
+                                    title = s.gitCreateTagTitle,
+                                    subtitle = s.gitCreateTagSubtitle(status.currentBranch ?: "HEAD"),
                                     enabled = !status.isUnborn,
                                     onClick = {
                                         onDismiss()
@@ -865,8 +854,12 @@ fun GitActionSheet(
                             item {
                                 GitMenuActionRow(
                                     icon = Icons.Rounded.CloudUpload,
-                                    title = "Отправить все теги (Push Tags)",
-                                    subtitle = if (hasRemote) "Отправить локальные теги в $primaryRemote" else "Нет подключённого remote",
+                                    title = s.gitPushTagsTitle,
+                                    subtitle = if (primaryRemote != null) {
+                                        s.gitPushTagsSubtitle(primaryRemote)
+                                    } else {
+                                        s.gitNoRemoteConnected
+                                    },
                                     enabled = hasRemote && state.tags.isNotEmpty(),
                                     onClick = {
                                         onDismiss()
@@ -877,7 +870,7 @@ fun GitActionSheet(
                             if (state.tags.isEmpty()) {
                                 item {
                                     Text(
-                                        text = "Тегов пока нет.",
+                                        text = s.gitNoTagsYet,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(vertical = 8.dp)
@@ -886,7 +879,7 @@ fun GitActionSheet(
                             } else {
                                 item {
                                     Text(
-                                        text = "Локальные теги (${state.tags.size})",
+                                        text = s.gitLocalTagsHeader(state.tags.size),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(top = 6.dp)
@@ -944,7 +937,7 @@ fun GitActionSheet(
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Rounded.DeleteOutline,
-                                                    contentDescription = "Удалить тег",
+                                                    contentDescription = s.gitDeleteTagDesc,
                                                     tint = MaterialTheme.colorScheme.error
                                                 )
                                             }

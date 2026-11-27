@@ -1,5 +1,8 @@
 package com.pocketworker.app.ui.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
+import com.pocketworker.app.core.i18n.AppStrings
+
 /**
  * Pure-Kotlin Markdown AST and parser tailored for AI chat responses (including live streaming).
  *
@@ -19,12 +22,23 @@ enum class MdColumnAlignment {
     RIGHT
 }
 
-enum class MdCalloutType(val title: String) {
-    NOTE("Заметка"),
-    TIP("Совет"),
-    IMPORTANT("Важно"),
-    WARNING("Внимание"),
-    CAUTION("Осторожно")
+enum class MdCalloutType {
+    NOTE,
+    TIP,
+    IMPORTANT,
+    WARNING,
+    CAUTION;
+
+    val title: String
+        get() = localizedTitle(AppLocale.current)
+
+    fun localizedTitle(s: AppStrings): String = when (this) {
+        NOTE -> s.mdCalloutNote
+        TIP -> s.mdCalloutTip
+        IMPORTANT -> s.mdCalloutImportant
+        WARNING -> s.mdCalloutWarning
+        CAUTION -> s.mdCalloutCaution
+    }
 }
 
 sealed interface MdListMarker {

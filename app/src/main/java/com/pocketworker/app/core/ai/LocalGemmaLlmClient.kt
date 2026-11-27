@@ -11,6 +11,7 @@ import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.ToolCall
 import com.google.ai.edge.litertlm.ToolProvider
 import com.google.ai.edge.litertlm.tool
+import com.pocketworker.app.core.i18n.AppLocale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -61,11 +62,12 @@ class LocalGemmaLlmClient(
     }
 
     override fun streamChat(request: LlmRequest): Flow<LlmStreamEvent> = flow {
+        val s = AppLocale.current
         val modelFile = modelManager.getDownloadedModelFile(request.model)
         if (modelFile == null) {
             emit(
                 LlmStreamEvent.Error(
-                    message = "Локальная модель «${request.model}» не скачана. Откройте «Настройки → Агент» и нажмите «Скачать модель».",
+                    message = s.aiLocalModelNotDownloaded(request.model),
                     statusCode = 404
                 )
             )
@@ -75,7 +77,7 @@ class LocalGemmaLlmClient(
         val sanitized = sanitizeConversationHistory(request.messages)
         val convertedMessages = buildLiteRtMessages(sanitized)
         if (convertedMessages.isEmpty()) {
-            emit(LlmStreamEvent.Error("Пустая история сообщений для локальной модели."))
+            emit(LlmStreamEvent.Error(s.localLlmErrEmptyHistory))
             return@flow
         }
 
@@ -89,8 +91,7 @@ class LocalGemmaLlmClient(
             } catch (ex: Throwable) {
                 emit(
                     LlmStreamEvent.Error(
-                        message = "Не удалось загрузить локальную модель Gemma 4: ${ex.localizedMessage ?: ex.javaClass.simpleName}. " +
-                            "Убедитесь, что на устройстве достаточно свободной ОЗУ."
+                        message = s.localLlmErrLoadFailed(ex.localizedMessage ?: ex.javaClass.simpleName)
                     )
                 )
                 return@flow
@@ -110,7 +111,7 @@ class LocalGemmaLlmClient(
             } catch (ex: Throwable) {
                 emit(
                     LlmStreamEvent.Error(
-                        message = "Ошибка инициализации диалога локальной модели: ${ex.localizedMessage ?: ex.javaClass.simpleName}"
+                        message = s.localLlmErrSessionInit(ex.localizedMessage ?: ex.javaClass.simpleName)
                     )
                 )
                 return@flow
@@ -147,7 +148,7 @@ class LocalGemmaLlmClient(
             } catch (ex: Throwable) {
                 emit(
                     LlmStreamEvent.Error(
-                        message = "Ошибка генерации локальной модели: ${ex.localizedMessage ?: ex.javaClass.simpleName}"
+                        message = s.localLlmErrGeneration(ex.localizedMessage ?: ex.javaClass.simpleName)
                     )
                 )
             } finally {

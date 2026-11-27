@@ -127,4 +127,36 @@ class AiContextTest {
         val session = AiChatSession(id = "1")
         assertEquals("Новый чат", session.title)
     }
+
+    @Test
+    fun `buildAiEmptyStatePrompt formats current location cleanly`() {
+        assertEquals(
+            "Над чем поработаем в проектах?",
+            buildAiEmptyStatePrompt(AiLocationContext.AllProjects)
+        )
+        assertEquals(
+            "Над чем поработаем в проекте «Shop Platform»?",
+            buildAiEmptyStatePrompt(AiLocationContext.ProjectFolder(projectId = "p1", projectName = "Shop Platform"))
+        )
+        assertEquals(
+            "Над чем поработаем в проекте?",
+            buildAiEmptyStatePrompt(AiLocationContext.ProjectFolder(projectId = "p1", projectName = "  "))
+        )
+        assertEquals(
+            "Над чем поработаем в репозитории «backend-api»?",
+            buildAiEmptyStatePrompt(AiLocationContext.Repository(repoName = "backend-api", currentDir = ""))
+        )
+        assertEquals(
+            "Над чем поработаем в папке «src/ui» репозитория «client»?",
+            buildAiEmptyStatePrompt(AiLocationContext.Repository(repoName = "client", currentDir = "src/ui"))
+        )
+        assertEquals(
+            "Над чем поработаем в файле «MainActivity.kt»?",
+            buildAiEmptyStatePrompt(AiLocationContext.File(repoName = "client", filePath = "app/src/MainActivity.kt"))
+        )
+        assertEquals(
+            "Над чем поработаем в файле?",
+            buildAiEmptyStatePrompt(AiLocationContext.File(filePath = ""))
+        )
+    }
 }

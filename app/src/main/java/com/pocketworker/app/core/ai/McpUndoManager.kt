@@ -2,6 +2,7 @@ package com.pocketworker.app.core.ai
 
 import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.ProjectFileManager
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.mcp.McpToolResult
 import com.pocketworker.app.core.mcp.buildCompactUnifiedDiff
 import com.pocketworker.app.core.mcp.matchesFileFilter
@@ -592,7 +593,7 @@ class McpUndoManager(
                 if (headDiff.isNotBlank()) return headDiff
             }
         }
-        return summary.diffSnapshot.ifBlank { "Нет видимых изменений в Git для файла ${summary.relativePath}." }
+        return summary.diffSnapshot.ifBlank { AppLocale.current.undoNoVisibleGitChanges(summary.relativePath) }
     }
 
     fun rollbackOperations(operationsChronological: List<McpUndoOperation>): RollbackSummary {
@@ -693,7 +694,7 @@ class McpUndoManager(
                 }
 
                 is McpUndoOperation.RemotePushNote -> {
-                    remoteWarnings.add("Удалённый push (${op.command}) нельзя отменить локально; локальное состояние откачено.")
+                    remoteWarnings.add(AppLocale.current.undoRemotePushWarning(op.command))
                 }
             }
         }

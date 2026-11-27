@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.mcp
 
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.ui.ai.AiLocationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -132,7 +133,7 @@ interface McpTool {
     fun classifyTier(arguments: JSONObject): McpPermissionTier = definition.defaultTier
 
     fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Выполнить инструмент ${definition.name}"
+        AppLocale.current.mcpConfirmGenericTool(definition.name)
 
     suspend fun execute(
         arguments: JSONObject,

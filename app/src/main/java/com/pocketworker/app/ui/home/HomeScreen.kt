@@ -42,8 +42,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -67,17 +65,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pocketworker.app.core.git.ProjectSummary
 import com.pocketworker.app.core.git.WorkspaceProject
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.AnimatedRefreshIconButton
 import com.pocketworker.app.ui.common.FormFieldShape
 import com.pocketworker.app.ui.common.FormOptionCard
 import com.pocketworker.app.ui.common.OnLifecycleResume
 import com.pocketworker.app.ui.common.PocketFormDialog
+import com.pocketworker.app.ui.common.NewItemHighlightContainer
+import com.pocketworker.app.ui.common.TopNotificationHost
 import com.pocketworker.app.ui.common.WorkspaceBackdrop
 import com.pocketworker.app.ui.common.appSwitchColors
 import com.pocketworker.app.ui.common.backdropCardBorderColor
 import com.pocketworker.app.ui.common.backdropCardContainerColor
 import com.pocketworker.app.ui.common.formTextFieldColors
 import com.pocketworker.app.ui.common.formatShortTimestamp
+import com.pocketworker.app.ui.common.rememberTopNotificationState
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,12 +87,14 @@ import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 fun HomeScreen(
     viewModel: HomeViewModel,
     animatedBackgroundEnabled: Boolean,
+    isVisibleToUser: Boolean = true,
     onOpenProject: (String) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val notificationState = rememberTopNotificationState()
     val isDark = LocalIsDarkTheme.current
+    val s = LocalAppStrings.current
 
     var showCreateProjectDialog by remember { mutableStateOf(false) }
     var projectToEdit by remember { mutableStateOf<WorkspaceProject?>(null) }
@@ -101,9 +105,13 @@ fun HomeScreen(
     }
 
     LaunchedEffect(state.errorMessage, state.infoMessage) {
-        val msg = state.errorMessage ?: state.infoMessage
-        if (msg != null) {
-            snackbarHostState.showSnackbar(msg)
+        val err = state.errorMessage
+        val info = state.infoMessage
+        if (err != null) {
+            notificationState.show(err, isError = true)
+            viewModel.clearMessages()
+        } else if (info != null) {
+            notificationState.show(info, isError = false)
             viewModel.clearMessages()
         }
     }
@@ -124,14 +132,14 @@ fun HomeScreen(
                     title = {
                         Column {
                             Text(
-                                text = "Проекты",
+                                text = s.homeTitle,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (state.projects.isEmpty()) {
-                                    "Рабочая папка"
+                                    s.homeWorkspaceFolder
                                 } else {
-                                    "Все проекты (${state.projects.size})"
+                                    s.homeAllProjectsCount(state.projects.size)
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -142,10 +150,10 @@ fun HomeScreen(
                         AnimatedRefreshIconButton(
                             isRefreshing = state.isLoading,
                             onClick = { viewModel.refreshProjects() },
-                            contentDescription = "Обновить список"
+                            contentDescription = s.homeRefreshList
                         )
                         IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                            Icon(Icons.Rounded.Settings, contentDescription = s.commonSettings)
                         }
                     }
                 )
@@ -157,10 +165,9 @@ fun HomeScreen(
                         showCreateProjectDialog = true
                     },
                     icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text("Новый проект") }
+                    text = { Text(s.homeNewProject) }
                 )
-            },
-            snackbarHost = { SnackbarHost(snackbarHostState) }
+            }
         ) { padding ->
             Box(
                 modifier = Modifier
@@ -191,25 +198,40 @@ fun HomeScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(state.projects, key = { it.project.id }) { summary ->
-                                WorkspaceProjectCard(
-                                    summary = summary,
-                                    isDark = isDark,
-                                    onClick = { onOpenProject(summary.project.id) },
-                                    onEditClick = { projectToEdit = summary.project },
-                                    onDeleteClick = { projectToDelete = summary }
-                                )
+                                NewItemHighlightContainer(
+                                    itemId = summary.project.id,
+                                    isNewlyAdded = summary.project.id in state.newlyAddedProjectIds,
+                                    isVisibleToUser = isVisibleToUser,
+                                    onHighlightFinished = {
+                                        viewModel.consumeNewlyAddedProject(summary.project.id)
+                                    },
+                                    modifier = Modifier.animateItem()
+                                ) {
+                                    WorkspaceProjectCard(
+                                        summary = summary,
+                                        isDark = isDark,
+                                        onClick = { onOpenProject(summary.project.id) },
+                                        onEditClick = { projectToEdit = summary.project },
+                                        onDeleteClick = { projectToDelete = summary }
+                                    )
+                                }
                             }
                         }
                     }
                 }
+
+                TopNotificationHost(
+                    state = notificationState,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
             }
         }
     }
 
     if (showCreateProjectDialog) {
         ProjectFormDialog(
-            title = "Новый проект",
-            confirmLabel = "Создать",
+            title = s.homeNewProject,
+            confirmLabel = s.commonCreate,
             initialName = "",
             initialDescription = "",
             showOpenImmediatelyOption = true,
@@ -235,8 +257,8 @@ fun HomeScreen(
 
     projectToEdit?.let { target ->
         ProjectFormDialog(
-            title = "Редактировать проект",
-            confirmLabel = "Сохранить",
+            title = s.homeEditProject,
+            confirmLabel = s.commonSave,
             initialName = target.name,
             initialDescription = target.description,
             showOpenImmediatelyOption = false,
@@ -254,11 +276,9 @@ fun HomeScreen(
     projectToDelete?.let { summary ->
         AlertDialog(
             onDismissRequest = { projectToDelete = null },
-            title = { Text("Удалить проект «${summary.project.name}»?") },
+            title = { Text(s.homeDeleteProjectTitle(summary.project.name)) },
             text = {
-                Text(
-                    "Папка проекта и все входящие в неё локальные репозитории (${summary.repoCount}) будут удалены с устройства. Удалённые репозитории в облаке не пострадают."
-                )
+                Text(s.homeDeleteProjectMessage(summary.repoCount))
             },
             confirmButton = {
                 TextButton(
@@ -270,12 +290,12 @@ fun HomeScreen(
                         contentColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text("Удалить")
+                    Text(s.commonDelete)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { projectToDelete = null }) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
             }
         )
@@ -287,6 +307,7 @@ private fun EmptyWorkspaceProjectsPlaceholder(
     onCreateClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalAppStrings.current
     Column(
         modifier = modifier.padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -299,11 +320,11 @@ private fun EmptyWorkspaceProjectsPlaceholder(
             modifier = Modifier.size(64.dp)
         )
         Text(
-            text = "Пока нет проектов",
+            text = s.homeEmptyTitle,
             style = MaterialTheme.typography.titleLarge
         )
         Text(
-            text = "Создайте проект-папку, чтобы объединить внутри несколько репозиториев (клиент, бэкенд, админку, сервисы).",
+            text = s.homeEmptySubtitle,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -311,7 +332,7 @@ private fun EmptyWorkspaceProjectsPlaceholder(
         TextButton(onClick = onCreateClick) {
             Icon(Icons.Rounded.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Создать первый проект")
+            Text(s.homeCreateFirstProject)
         }
     }
 }
@@ -325,6 +346,7 @@ internal fun WorkspaceProjectCard(
     onDeleteClick: () -> Unit,
     interactive: Boolean = true
 ) {
+    val s = LocalAppStrings.current
     var menuExpanded by remember { mutableStateOf(false) }
     val cardShape = RoundedCornerShape(18.dp)
 
@@ -380,7 +402,7 @@ internal fun WorkspaceProjectCard(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.MoreVert,
-                            contentDescription = "Меню проекта",
+                            contentDescription = s.homeProjectMenu,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -389,7 +411,7 @@ internal fun WorkspaceProjectCard(
                         onDismissRequest = { menuExpanded = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Переименовать / описание") },
+                            text = { Text(s.homeRenameOrDescription) },
                             leadingIcon = { Icon(Icons.Rounded.DriveFileRenameOutline, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
@@ -397,7 +419,7 @@ internal fun WorkspaceProjectCard(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Удалить проект") },
+                            text = { Text(s.homeDeleteProjectAction) },
                             leadingIcon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
@@ -427,7 +449,7 @@ internal fun WorkspaceProjectCard(
                     shape = MaterialTheme.shapes.small
                 ) {
                     Text(
-                        text = formatRepoCountLabel(summary.repoCount),
+                        text = s.formatRepoCount(summary.repoCount),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -441,7 +463,7 @@ internal fun WorkspaceProjectCard(
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
-                            text = "С изменениями: ${summary.dirtyRepoCount}",
+                            text = s.homeDirtyReposBadge(summary.dirtyRepoCount),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -466,7 +488,7 @@ internal fun WorkspaceProjectCard(
                 )
             } else {
                 Text(
-                    text = "Нажмите, чтобы подключить или создать репозитории • ${formatShortTimestamp(summary.project.createdAt)}",
+                    text = s.homeEmptyProjectHint(formatShortTimestamp(summary.project.createdAt)),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -488,6 +510,7 @@ private fun ProjectFormDialog(
     onDismiss: () -> Unit,
     onConfirm: (name: String, description: String, openImmediately: Boolean) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf(initialName) }
     var description by remember { mutableStateOf(initialDescription) }
     var openImmediately by remember { mutableStateOf(true) }
@@ -495,9 +518,9 @@ private fun ProjectFormDialog(
     PocketFormDialog(
         title = title,
         subtitle = if (showOpenImmediatelyOption) {
-            "Папка-контейнер для ваших репозиториев"
+            s.homeProjectCreateSubtitle
         } else {
-            "Измените название или заметку о проекте"
+            s.homeProjectEditSubtitle
         },
         icon = if (showOpenImmediatelyOption) {
             Icons.Rounded.CreateNewFolder
@@ -535,7 +558,7 @@ private fun ProjectFormDialog(
         } else null,
         footerActions = {
             TextButton(onClick = onDismiss, enabled = !isSaving) {
-                Text("Отмена")
+                Text(s.commonCancel)
             }
             Button(
                 onClick = { onConfirm(name, description, openImmediately) },
@@ -553,8 +576,8 @@ private fun ProjectFormDialog(
                 name = it
                 onInputChanged()
             },
-            label = { Text("Название проекта") },
-            placeholder = { Text("Например: Shop Platform") },
+            label = { Text(s.homeProjectNameLabel) },
+            placeholder = { Text(s.homeProjectNamePlaceholder) },
             singleLine = true,
             enabled = !isSaving,
             shape = FormFieldShape,
@@ -568,8 +591,8 @@ private fun ProjectFormDialog(
                 description = it
                 onInputChanged()
             },
-            label = { Text("Описание (необязательно)") },
-            placeholder = { Text("Клиент, бэкенд, админка и сервисы") },
+            label = { Text(s.homeProjectDescLabel) },
+            placeholder = { Text(s.homeProjectDescPlaceholder) },
             minLines = 2,
             maxLines = 4,
             enabled = !isSaving,
@@ -591,12 +614,12 @@ private fun ProjectFormDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Сразу открыть проект",
+                            text = s.homeOpenProjectImmediately,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Перейти к добавлению репозиториев после создания",
+                            text = s.homeOpenProjectImmediatelyHint,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -616,16 +639,4 @@ private fun ProjectFormDialog(
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
-}
-
-private fun formatRepoCountLabel(count: Int): String {
-    val mod100 = count % 100
-    val mod10 = count % 10
-    val word = when {
-        mod100 in 11..14 -> "репозиториев"
-        mod10 == 1 -> "репозиторий"
-        mod10 in 2..4 -> "репозитория"
-        else -> "репозиториев"
-    }
-    return "$count $word"
 }

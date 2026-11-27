@@ -1,9 +1,11 @@
 package com.pocketworker.app.core.mcp
 
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.RepoEntry
 import com.pocketworker.app.core.git.RepoGroupDiscoveryService
 import com.pocketworker.app.core.git.WorkspaceProject
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
 import com.pocketworker.app.ui.ai.AiLocationContext
@@ -50,7 +52,7 @@ internal class McpWorkspaceResolver(
                 errorCode = McpErrorCodes.REPO_NOT_FOUND,
                 message = "Папка репозитория '${repo.name}' отсутствует на диске.",
                 recoverableByAgent = false,
-                userMessageHint = "Папка репозитория '${repo.name}' была удалена с устройства."
+                userMessageHint = AppLocale.current.mcpHintRepoFolderDeleted(repo.name)
             )
         }
         return ResolvedRepo(project, repo, dir) to null
@@ -69,15 +71,16 @@ internal fun createWorkspaceTools(
     gitEngine: GitEngine,
     credentialStore: CredentialStore,
     groupDiscoveryService: RepoGroupDiscoveryService,
-    resolver: McpWorkspaceResolver
+    resolver: McpWorkspaceResolver,
+    oauthManager: GitOAuthManager? = null
 ): List<McpTool> = listOf(
     WorkspaceGetContextTool(registry, gitEngine),
     WorkspaceListProjectsTool(registry, gitEngine),
     WorkspaceCreateProjectTool(registry),
     WorkspaceListReposTool(registry, gitEngine, resolver),
     WorkspaceCreateRepoTool(registry, gitEngine, resolver),
-    WorkspaceCloneRepoTool(registry, gitEngine, credentialStore, resolver),
-    WorkspaceDiscoverGroupReposTool(credentialStore, groupDiscoveryService)
+    WorkspaceCloneRepoTool(registry, gitEngine, credentialStore, resolver, oauthManager),
+    WorkspaceDiscoverGroupReposTool(credentialStore, groupDiscoveryService, oauthManager)
 )
 
 private class WorkspaceGetContextTool(
@@ -196,7 +199,7 @@ private class WorkspaceCreateProjectTool(
     )
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Создать новый проект «${arguments.optString("name")}»"
+        AppLocale.current.mcpConfirmCreateProject(arguments.optString("name"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val name = arguments.requireNonBlankString("name")
@@ -284,7 +287,7 @@ private class WorkspaceCreateRepoTool(
     )
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Создать репозиторий «${arguments.optString("name")}»"
+        AppLocale.current.mcpConfirmCreateRepo(arguments.optString("name"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")
@@ -303,7 +306,7 @@ private class WorkspaceCreateRepoTool(
                 message = "SSH-ссылка '$remoteUrl' не поддерживается на Android.",
                 recoverableByAgent = false,
                 reason = "Мобильный JGit-клиент работает только по HTTPS с Personal Access Token (PAT).",
-                userMessageHint = "Укажите HTTPS-ссылку репозитория (https://...) вместо SSH."
+                userMessageHint = AppLocale.current.mcpHintUseHttpsNotSsh
             )
         }
 
@@ -341,7 +344,8 @@ private class WorkspaceCloneRepoTool(
     private val registry: ProjectRegistry,
     private val gitEngine: GitEngine,
     private val credentialStore: CredentialStore,
-    private val resolver: McpWorkspaceResolver
+    private val resolver: McpWorkspaceResolver,
+    private val oauthManager: GitOAuthManager? = null
 ) : McpTool {
     override val definition = McpToolDefinition(
         name = "workspace_clone_repo",
@@ -360,7 +364,7 @@ private class WorkspaceCloneRepoTool(
     )
 
     override fun buildConfirmationSummary(arguments: JSONObject): String =
-        "Клонировать репозиторий ${arguments.optString("url")}"
+        AppLocale.current.mcpConfirmCloneRepo(arguments.optString("url"))
 
     override suspend fun execute(arguments: JSONObject, context: McpExecutionContext): McpToolResult {
         val projectId = arguments.requireNonBlankString("projectId")
@@ -374,7 +378,7 @@ private class WorkspaceCloneRepoTool(
                 message = "Клонирование по SSH ('$url') не поддерживается в мобильном клиенте.",
                 recoverableByAgent = false,
                 reason = "PocketWorker на Android поддерживает только HTTPS-транспорт с Personal Access Token.",
-                userMessageHint = "Для клонирования используйте HTTPS-ссылку (https://...) и при необходимости добавьте PAT в настройках."
+                userMessageHint = AppLocale.current.mcpHintUseHttpsClone
             )
         }
 
@@ -382,7 +386,10 @@ private class WorkspaceCloneRepoTool(
             ?: ProjectDetailViewModel.deriveRepoNameFromUrl(url)
         val branch = arguments.optNonBlankString("branch")
         val useStoredAuth = arguments.optBoolean("useStoredAuth", true)
-        val creds = if (useStoredAuth) credentialStore.resolveForRepo(projectId, null) else null
+        val creds = if (useStoredAuth) {
+            oauthManager?.resolveFreshCredentials(projectId, null, url)
+                ?: credentialStore.resolveForRepo(projectId, null, url)
+        } else null
 
         val (repoId, targetDir) = registry.allocateRepositoryDir(projectId, repoName)
         return runCatching {
@@ -417,7 +424,8 @@ private class WorkspaceCloneRepoTool(
 
 private class WorkspaceDiscoverGroupReposTool(
     private val credentialStore: CredentialStore,
-    private val groupDiscoveryService: RepoGroupDiscoveryService
+    private val groupDiscoveryService: RepoGroupDiscoveryService,
+    private val oauthManager: GitOAuthManager? = null
 ) : McpTool {
     override val definition = McpToolDefinition(
         name = "workspace_discover_group_repos",
@@ -438,8 +446,13 @@ private class WorkspaceDiscoverGroupReposTool(
         val projectId = arguments.optNonBlankString("projectId")
         val useStoredAuth = arguments.optBoolean("useStoredAuth", true)
         val creds = if (useStoredAuth) {
-            if (projectId != null) credentialStore.resolveForRepo(projectId, null)
-            else credentialStore.getDefaultCredentials()
+            oauthManager?.resolveFreshCredentials(projectId, null, url)
+                ?: if (projectId != null) {
+                    credentialStore.resolveForRepo(projectId, null, url)
+                } else {
+                    credentialStore.resolveOAuthAccountForRepo(null, null, url)?.toGitCredentials()
+                        ?: credentialStore.getDefaultCredentials()
+                }
         } else null
 
         return runCatching {
@@ -467,6 +480,7 @@ private class WorkspaceDiscoverGroupReposTool(
 }
 
 internal fun mapTransportFailure(err: Throwable): McpToolResult {
+    val s = AppLocale.current
     val raw = err.localizedMessage ?: err.message ?: err.javaClass.simpleName
     val lower = raw.lowercase()
     return when {
@@ -475,21 +489,21 @@ internal fun mapTransportFailure(err: Throwable): McpToolResult {
             message = formatGitTransportError(err),
             recoverableByAgent = false,
             reason = "Сервер требует авторизацию (PAT).",
-            userMessageHint = "Добавьте или обновите Personal Access Token в «Настройки → Общие» для репозитория, проекта или по умолчанию."
+            userMessageHint = s.mcpHintAddPatInSettings
         )
         "403" in lower || "forbidden" in lower -> McpToolResult.error(
             errorCode = McpErrorCodes.AUTH_FORBIDDEN,
             message = formatGitTransportError(err),
             recoverableByAgent = false,
             reason = "Недостаточно прав у текущего токена (403).",
-            userMessageHint = "Проверьте права доступа (scopes) вашего Personal Access Token к этому репозиторию."
+            userMessageHint = s.mcpHintCheckPatScopes
         )
         "unknownhost" in lower || "connect" in lower || "timed out" in lower || "network" in lower -> McpToolResult.error(
             errorCode = McpErrorCodes.NETWORK_UNREACHABLE,
             message = formatGitTransportError(err),
             recoverableByAgent = false,
             reason = "Не удалось установить сетевое соединение с Git-сервером.",
-            userMessageHint = "Проверьте подключение к интернету и доступность сервера."
+            userMessageHint = s.mcpHintCheckNetwork
         )
         else -> McpToolResult.error(
             errorCode = McpErrorCodes.INTERNAL_ERROR,

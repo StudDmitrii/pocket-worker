@@ -2,6 +2,7 @@ package com.pocketworker.app.core.storage
 
 import com.pocketworker.app.core.git.RepoEntry
 import com.pocketworker.app.core.git.WorkspaceProject
+import com.pocketworker.app.core.i18n.AppLocale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -17,6 +18,27 @@ class ProjectRegistry(
         val project: WorkspaceProject,
         val repositories: List<RepoEntry>
     )
+
+    // In-memory tracking of projects/repositories created during this app session
+    // (manually or by AI via MCP) so their cards animate with a "Новый" entrance highlight.
+    private val pendingNewProjectIds = linkedSetOf<String>()
+    private val pendingNewRepoIds = linkedSetOf<String>()
+
+    @Synchronized
+    fun getPendingNewProjectIds(): Set<String> = pendingNewProjectIds.toSet()
+
+    @Synchronized
+    fun markProjectSeen(projectId: String) {
+        pendingNewProjectIds.remove(projectId)
+    }
+
+    @Synchronized
+    fun getPendingNewRepoIds(): Set<String> = pendingNewRepoIds.toSet()
+
+    @Synchronized
+    fun markRepoSeen(repoId: String) {
+        pendingNewRepoIds.remove(repoId)
+    }
 
     init {
         if (!projectsRootDir.exists()) {
@@ -39,12 +61,12 @@ class ProjectRegistry(
     @Synchronized
     fun createProject(name: String, description: String = ""): WorkspaceProject {
         val cleanName = name.trim()
-        require(cleanName.isNotEmpty()) { "Название проекта не может быть пустым" }
+        require(cleanName.isNotEmpty()) { AppLocale.current.homeErrEmptyProjectName }
 
         val records = loadAndReconcileAll().toMutableList()
         val dir = allocateUniqueChildDir(projectsRootDir, cleanName, fallback = "project")
         if (!dir.mkdirs() && !dir.exists()) {
-            throw IllegalStateException("Не удалось создать папку проекта: ${dir.absolutePath}")
+            throw IllegalStateException(AppLocale.current.registryErrCreateDirFailed(dir.absolutePath))
         }
 
         val project = WorkspaceProject(
@@ -58,13 +80,14 @@ class ProjectRegistry(
         records.removeAll { File(it.project.directoryPath).canonicalPath == targetCanonical }
         records.add(StoredProject(project, emptyList()))
         writeRecords(records)
+        pendingNewProjectIds.add(project.id)
         return project
     }
 
     @Synchronized
     fun updateProject(projectId: String, newName: String, newDescription: String) {
         val cleanName = newName.trim()
-        require(cleanName.isNotEmpty()) { "Название проекта не может быть пустым" }
+        require(cleanName.isNotEmpty()) { AppLocale.current.homeErrEmptyProjectName }
         val records = loadAndReconcileAll().map { stored ->
             if (stored.project.id == projectId) {
                 stored.copy(
@@ -105,6 +128,8 @@ class ProjectRegistry(
         val target = records.firstOrNull { it.project.id == projectId }
         val remaining = records.filterNot { it.project.id == projectId }
         writeRecords(remaining)
+        pendingNewProjectIds.remove(projectId)
+        target?.repositories?.forEach { pendingNewRepoIds.remove(it.id) }
         if (deleteFilesOnDisk && target != null) {
             File(target.project.directoryPath).deleteRecursively()
         }
@@ -126,7 +151,7 @@ class ProjectRegistry(
     @Synchronized
     fun allocateRepositoryDir(projectId: String, preferredName: String): Pair<String, File> {
         val project = findProjectById(projectId)
-            ?: throw IllegalStateException("Проект не найден: $projectId")
+            ?: throw IllegalStateException(AppLocale.current.registryErrProjectNotFound(projectId))
         val projectDir = File(project.directoryPath)
         if (!projectDir.exists()) {
             projectDir.mkdirs()
@@ -149,6 +174,7 @@ class ProjectRegistry(
             }
         }
         writeRecords(records)
+        pendingNewRepoIds.add(entry.id)
     }
 
     @Synchronized
@@ -183,6 +209,7 @@ class ProjectRegistry(
             }
         }
         writeRecords(updated)
+        pendingNewRepoIds.remove(repoId)
         if (deleteFilesOnDisk && targetRepo != null) {
             File(targetRepo!!.directoryPath).deleteRecursively()
         }

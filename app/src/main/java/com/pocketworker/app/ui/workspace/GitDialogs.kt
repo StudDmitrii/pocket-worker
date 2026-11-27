@@ -73,6 +73,7 @@ import com.pocketworker.app.core.git.FileChangeType
 import com.pocketworker.app.core.git.GitBranch
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitRemote
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.common.FormFieldShape
 import com.pocketworker.app.ui.common.FormOptionCard
 import com.pocketworker.app.ui.common.PocketFormDialog
@@ -141,7 +142,7 @@ fun DiffViewerDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Закрыть")
+                Text(LocalAppStrings.current.commonClose)
             }
         }
     )
@@ -155,6 +156,7 @@ fun CommitDetailSheet(
     onViewFileDiff: (commitId: String, path: String) -> Unit,
     onCreateBranchFromCommit: (commitId: String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     val clipboard = LocalClipboardManager.current
     val commit = detail.commit
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -190,7 +192,7 @@ fun CommitDetailSheet(
                 IconButton(onClick = { clipboard.setText(AnnotatedString(commit.id)) }) {
                     Icon(
                         imageVector = Icons.Rounded.ContentCopy,
-                        contentDescription = "Копировать SHA",
+                        contentDescription = s.gitCopyShaDesc,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -209,7 +211,7 @@ fun CommitDetailSheet(
 
             if (commit.parentIds.isNotEmpty()) {
                 Text(
-                    text = "Родители: ${commit.parentIds.joinToString(", ") { it.take(7) }}",
+                    text = s.gitCommitParents(commit.parentIds.joinToString(", ") { it.take(7) }),
                     style = MaterialTheme.typography.labelMedium,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -222,13 +224,13 @@ fun CommitDetailSheet(
             ) {
                 Icon(Icons.Rounded.AccountTree, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Создать ветку от этого коммита")
+                Text(s.gitCreateBranchFromCommit)
             }
 
             HorizontalDivider()
 
             Text(
-                text = "Изменённые файлы (${detail.changedFiles.size})",
+                text = s.gitChangedFilesHeader(detail.changedFiles.size),
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -256,7 +258,7 @@ fun CommitDetailSheet(
                             )
                             if (change.oldPath != null) {
                                 Text(
-                                    text = "из ${change.oldPath}",
+                                    text = s.gitRenamedFrom(change.oldPath),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -301,16 +303,17 @@ fun CreateBranchDialog(
     onDismiss: () -> Unit,
     onCreate: (name: String, checkout: Boolean) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var branchName by remember { mutableStateOf("") }
     var checkout by remember { mutableStateOf(true) }
 
     PocketFormDialog(
-        title = "Новая ветка",
-        subtitle = "От базы: $startPointLabel",
+        title = s.gitNewBranchTitle,
+        subtitle = s.gitNewBranchBase(startPointLabel),
         icon = Icons.Rounded.AccountTree,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onCreate(branchName, checkout)
@@ -320,14 +323,14 @@ fun CreateBranchDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Создать")
+                Text(s.commonCreate)
             }
         }
     ) {
         OutlinedTextField(
             value = branchName,
             onValueChange = { branchName = it },
-            label = { Text("Имя ветки") },
+            label = { Text(s.gitBranchNameLabel) },
             placeholder = { Text("feature/my-change") },
             singleLine = true,
             shape = FormFieldShape,
@@ -343,7 +346,7 @@ fun CreateBranchDialog(
                     .clickable { checkout = !checkout }
             ) {
                 Text(
-                    text = "Сразу переключиться на ветку",
+                    text = s.gitCheckoutImmediately,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
@@ -365,15 +368,16 @@ fun RenameBranchDialog(
     onDismiss: () -> Unit,
     onRename: (String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var newName by remember { mutableStateOf(currentName) }
 
     PocketFormDialog(
-        title = "Переименовать ветку",
-        subtitle = "Текущее имя: $currentName",
+        title = s.gitRenameBranchTitle,
+        subtitle = s.gitRenameBranchCurrent(currentName),
         icon = Icons.Rounded.DriveFileRenameOutline,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onRename(newName)
@@ -383,14 +387,14 @@ fun RenameBranchDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
         OutlinedTextField(
             value = newName,
             onValueChange = { newName = it },
-            label = { Text("Новое имя ветки") },
+            label = { Text(s.gitNewBranchNameLabel) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
@@ -405,17 +409,18 @@ fun RemoteEditorDialog(
     onDismiss: () -> Unit,
     onSave: (name: String, url: String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf(existingRemote?.name ?: "origin") }
     var url by remember { mutableStateOf(existingRemote?.fetchUrl ?: "") }
     val isEdit = existingRemote != null
 
     PocketFormDialog(
-        title = if (isEdit) "Редактировать remote" else "Добавить remote",
-        subtitle = "Подключение к удалённому Git-репозиторию",
+        title = if (isEdit) s.gitEditRemoteTitle else s.gitAddRemoteTitle.removeSuffix("..."),
+        subtitle = s.gitRemoteDialogSubtitle,
         icon = Icons.Rounded.Cloud,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onSave(name, url)
@@ -425,14 +430,14 @@ fun RemoteEditorDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
-            label = { Text("Имя remote") },
+            label = { Text(s.gitRemoteNameLabel) },
             enabled = !isEdit,
             singleLine = true,
             shape = FormFieldShape,
@@ -442,7 +447,7 @@ fun RemoteEditorDialog(
         OutlinedTextField(
             value = url,
             onValueChange = { url = it },
-            label = { Text("Ссылка на Git-репозиторий") },
+            label = { Text(s.repoUrlLabel) },
             placeholder = { Text("https://github.com/user/repo.git") },
             singleLine = true,
             shape = FormFieldShape,
@@ -459,17 +464,18 @@ fun ProjectCredentialsDialog(
     onDismiss: () -> Unit,
     onSave: (username: String, token: String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var username by remember { mutableStateOf(currentCredentials?.username ?: "") }
     var token by remember { mutableStateOf(currentCredentials?.tokenOrPassword ?: "") }
     var showToken by remember { mutableStateOf(false) }
 
     PocketFormDialog(
-        title = "Авторизация репозитория",
-        subtitle = "Для операций fetch, pull и push",
+        title = s.gitRepoAuthTitle,
+        subtitle = s.gitRepoAuthSubtitle,
         icon = Icons.Rounded.Key,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onSave(username, token)
@@ -478,15 +484,15 @@ fun ProjectCredentialsDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
         Text(
             text = if (hasDefaultCredentials) {
-                "Оставьте поле токена пустым, чтобы использовать токен проекта или токен по умолчанию."
+                s.gitRepoAuthFallbackHint
             } else {
-                "Укажите логин и Personal Access Token (PAT) для fetch, pull и push."
+                s.gitRepoAuthDirectHint
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -494,7 +500,7 @@ fun ProjectCredentialsDialog(
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Имя пользователя") },
+            label = { Text(s.commonUsername) },
             placeholder = { Text("x-access-token") },
             singleLine = true,
             shape = FormFieldShape,
@@ -530,13 +536,14 @@ fun AuthorConfigDialog(
     onSave: (name: String, email: String, saveGlobally: Boolean) -> Unit,
     onResetToDefault: (() -> Unit)? = null
 ) {
+    val s = LocalAppStrings.current
     var name by remember { mutableStateOf(currentName) }
     var email by remember { mutableStateOf(currentEmail) }
     var saveGlobally by remember { mutableStateOf(false) }
 
     PocketFormDialog(
-        title = "Автор коммитов",
-        subtitle = "Подпись коммитов в этом репозитории",
+        title = s.gitAuthorTitle,
+        subtitle = s.gitAuthorRepoSubtitle,
         icon = Icons.Rounded.Person,
         onDismiss = onDismiss,
         footerActions = {
@@ -547,10 +554,10 @@ fun AuthorConfigDialog(
                         onDismiss()
                     }
                 ) {
-                    Text("Сбросить", color = MaterialTheme.colorScheme.error)
+                    Text(s.commonReset, color = MaterialTheme.colorScheme.error)
                 }
             }
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onSave(name, email, saveGlobally)
@@ -560,7 +567,7 @@ fun AuthorConfigDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
@@ -591,7 +598,7 @@ fun AuthorConfigDialog(
                     .clickable { saveGlobally = !saveGlobally }
             ) {
                 Text(
-                    text = "Сохранить также глобально",
+                    text = s.gitAuthorSaveGlobally,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
@@ -613,16 +620,17 @@ fun CreateStashDialog(
     onDismiss: () -> Unit,
     onCreate: (message: String, includeUntracked: Boolean) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var message by remember { mutableStateOf("") }
     var includeUntracked by remember { mutableStateOf(initialIncludeUntracked) }
 
     PocketFormDialog(
-        title = "Сохранить в Stash",
-        subtitle = "Временно отложить текущие изменения",
+        title = s.gitStashDialogTitle,
+        subtitle = s.gitStashDialogSubtitle,
         icon = Icons.Rounded.Archive,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onCreate(message, includeUntracked)
@@ -631,15 +639,15 @@ fun CreateStashDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("В Stash")
+                Text(s.gitStashAction)
             }
         }
     ) {
         OutlinedTextField(
             value = message,
             onValueChange = { message = it },
-            label = { Text("Описание (необязательно)") },
-            placeholder = { Text("Например: WIP авторизация") },
+            label = { Text(s.gitStashMessageLabel) },
+            placeholder = { Text(s.gitStashMessagePlaceholder) },
             singleLine = true,
             shape = FormFieldShape,
             colors = formTextFieldColors(),
@@ -654,7 +662,7 @@ fun CreateStashDialog(
                     .clickable { includeUntracked = !includeUntracked }
             ) {
                 Text(
-                    text = "Включать новые (untracked) файлы",
+                    text = s.gitStashIncludeUntrackedOption,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
@@ -675,16 +683,17 @@ fun CreateTagDialog(
     onDismiss: () -> Unit,
     onCreate: (name: String, message: String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var tagName by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
 
     PocketFormDialog(
-        title = "Новый тег",
-        subtitle = "Пометка текущего коммита версией",
+        title = s.gitTagDialogTitle,
+        subtitle = s.gitTagDialogSubtitle,
         icon = Icons.Rounded.Sell,
         onDismiss = onDismiss,
         footerActions = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(s.commonCancel) }
             Button(
                 onClick = {
                     onCreate(tagName, message)
@@ -694,14 +703,14 @@ fun CreateTagDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Создать")
+                Text(s.commonCreate)
             }
         }
     ) {
         OutlinedTextField(
             value = tagName,
             onValueChange = { tagName = it },
-            label = { Text("Имя тега") },
+            label = { Text(s.gitTagNameLabel) },
             placeholder = { Text("v1.0.0") },
             singleLine = true,
             shape = FormFieldShape,
@@ -711,8 +720,8 @@ fun CreateTagDialog(
         OutlinedTextField(
             value = message,
             onValueChange = { message = it },
-            label = { Text("Аннотация (необязательно)") },
-            placeholder = { Text("Релиз новой версии") },
+            label = { Text(s.gitTagAnnotationLabel) },
+            placeholder = { Text(s.gitTagAnnotationPlaceholder) },
             minLines = 2,
             maxLines = 4,
             shape = FormFieldShape,
@@ -732,6 +741,7 @@ fun BranchPickerSheet(
     onCreateBranchClick: () -> Unit,
     onRenameBranchClick: (GitBranch) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var search by remember { mutableStateOf("") }
     val filtered = remember(branches, search) {
         if (search.isBlank()) {
@@ -762,7 +772,7 @@ fun BranchPickerSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Переключить ветку",
+                    text = s.gitSwitchBranchTitle,
                     style = MaterialTheme.typography.titleLarge
                 )
                 OutlinedButton(
@@ -775,7 +785,7 @@ fun BranchPickerSheet(
                 ) {
                     Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Новая")
+                    Text(s.gitNewBranchShort)
                 }
             }
 
@@ -783,7 +793,7 @@ fun BranchPickerSheet(
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
-                    placeholder = { Text("Поиск ветки...") },
+                    placeholder = { Text(s.gitSearchBranchPlaceholder) },
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
@@ -800,7 +810,7 @@ fun BranchPickerSheet(
                 if (local.isNotEmpty()) {
                     item(key = "header_local") {
                         Text(
-                            text = "Локальные ветки",
+                            text = s.gitLocalBranches,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp)
@@ -863,7 +873,7 @@ fun BranchPickerSheet(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.DriveFileRenameOutline,
-                                        contentDescription = "Переименовать ветку ${branch.name}",
+                                        contentDescription = s.gitRenameBranchDesc(branch.name),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -875,7 +885,7 @@ fun BranchPickerSheet(
                 if (remote.isNotEmpty()) {
                     item(key = "header_remote") {
                         Text(
-                            text = "Удалённые ветки",
+                            text = s.gitRemoteBranches,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp)
@@ -921,9 +931,9 @@ fun BranchPickerSheet(
                     item(key = "empty_branches") {
                         Text(
                             text = if (isUnborn) {
-                                "Ветка создастся автоматически после первого коммита"
+                                s.gitUnbornBranchHint
                             } else {
-                                "Подходящие ветки не найдены"
+                                s.gitNoMatchingBranches
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -996,7 +1006,7 @@ fun BranchSelectorDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
+            TextButton(onClick = onDismiss) { Text(LocalAppStrings.current.commonClose) }
         }
     )
 }
@@ -1007,6 +1017,7 @@ fun GitOutputDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val clipboard = LocalClipboardManager.current
 
     AlertDialog(
@@ -1029,10 +1040,10 @@ fun GitOutputDialog(
                                 clipboard.setText(AnnotatedString(fullLog))
                             }
                         ) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Копировать лог")
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = s.gitCopyLogDesc)
                         }
                         IconButton(onClick = onClear) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Очистить лог")
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = s.gitClearLogDesc)
                         }
                     }
                 }
@@ -1041,7 +1052,7 @@ fun GitOutputDialog(
         text = {
             if (logs.isEmpty()) {
                 Text(
-                    text = "Выполненные Git-команды и их вывод появятся здесь.",
+                    text = s.gitOutputEmptyHint,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1090,7 +1101,7 @@ fun GitOutputDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
+            TextButton(onClick = onDismiss) { Text(s.commonClose) }
         }
     )
 }
@@ -1159,7 +1170,7 @@ fun RemoteSelectorDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(LocalAppStrings.current.commonCancel) }
         }
     )
 }

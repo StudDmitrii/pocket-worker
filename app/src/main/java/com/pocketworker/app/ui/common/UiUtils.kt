@@ -1,10 +1,17 @@
 package com.pocketworker.app.ui.common
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Refresh
@@ -65,7 +73,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pocketworker.app.core.git.GitCredentials
+import com.pocketworker.app.core.i18n.AppLocale
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,25 +88,27 @@ fun formatShortTimestamp(timestampMillis: Long): String {
 }
 
 fun formatFileSize(bytes: Long): String {
+    val s = AppLocale.current
     return when {
-        bytes < 1024 -> "$bytes Б"
-        bytes < 1024 * 1024 -> "${bytes / 1024} КБ"
-        else -> String.format(Locale.getDefault(), "%.1f МБ", bytes / (1024f * 1024f))
+        bytes < 1024 -> s.formatBytes(bytes)
+        bytes < 1024 * 1024 -> s.formatKilobytes(bytes / 1024)
+        else -> s.formatMegabytes(String.format(Locale.getDefault(), "%.1f", bytes / (1024f * 1024f)))
     }
 }
 
 fun formatGitTransportError(error: Throwable): String {
     val raw = error.localizedMessage ?: error.message ?: error.javaClass.simpleName
     val lower = raw.lowercase()
+    val s = AppLocale.current
     return when {
         "not authorized" in lower || "authentication is required" in lower || "401" in lower ->
-            "Ошибка авторизации: проверьте логин и Personal Access Token (PAT).\nДетали: $raw"
+            s.gitTransportAuthError(raw)
         "403" in lower || "forbidden" in lower ->
-            "Доступ запрещён (403): убедитесь, что токен имеет права на этот репозиторий.\nДетали: $raw"
+            s.gitTransportForbiddenError(raw)
         "not found" in lower || "404" in lower ->
-            "Репозиторий или ветка не найдены (404). Проверьте ссылку и права доступа.\nДетали: $raw"
+            s.gitTransportNotFoundError(raw)
         "unknownhost" in lower || "cannot open git-upload-pack" in lower || "connect" in lower ->
-            "Не удалось подключиться к серверу. Проверьте интернет и адрес репозитория.\nДетали: $raw"
+            s.gitTransportConnectionError(raw)
         else -> raw
     }
 }
@@ -103,7 +117,7 @@ fun formatGitTransportError(error: Throwable): String {
 fun AnimatedRefreshIconButton(
     isRefreshing: Boolean,
     onClick: () -> Unit,
-    contentDescription: String = "Обновить",
+    contentDescription: String = LocalAppStrings.current.commonRefresh,
     modifier: Modifier = Modifier
 ) {
     val rotation = remember { Animatable(0f) }
@@ -334,7 +348,7 @@ fun PocketFormDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Закрыть",
+                            contentDescription = LocalAppStrings.current.commonClose,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -385,18 +399,19 @@ fun CredentialsEditorDialog(
     onDismiss: () -> Unit,
     onSave: (username: String, token: String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var username by remember { mutableStateOf(currentCredentials?.username ?: "") }
     var token by remember { mutableStateOf(currentCredentials?.tokenOrPassword ?: "") }
     var showToken by remember { mutableStateOf(false) }
 
     PocketFormDialog(
         title = title,
-        subtitle = "Шифруется в Android Keystore",
+        subtitle = s.commonEncryptedInKeystore,
         icon = Icons.Rounded.Key,
         onDismiss = onDismiss,
         footerActions = {
             TextButton(onClick = onDismiss) {
-                Text("Отмена")
+                Text(s.commonCancel)
             }
             Button(
                 onClick = {
@@ -406,7 +421,7 @@ fun CredentialsEditorDialog(
                 shape = FormFieldShape,
                 modifier = Modifier.heightIn(min = 44.dp)
             ) {
-                Text("Сохранить")
+                Text(s.commonSave)
             }
         }
     ) {
@@ -418,7 +433,7 @@ fun CredentialsEditorDialog(
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Имя пользователя") },
+            label = { Text(s.commonUsername) },
             placeholder = { Text("x-access-token") },
             singleLine = true,
             shape = FormFieldShape,
@@ -447,5 +462,126 @@ fun CredentialsEditorDialog(
             },
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+/**
+ * Plays a smooth entrance pop-in, glowing emerald highlight pulse, and a temporary "Новый" badge
+ * for newly created projects and repositories (both manual and AI-created via MCP).
+ * Starts timing only once [isVisibleToUser] is true so animations triggered while the AI chat
+ * overlay is open are still seen when returning to the list.
+ */
+@Composable
+fun NewItemHighlightContainer(
+    itemId: String,
+    isNewlyAdded: Boolean,
+    isVisibleToUser: Boolean,
+    onHighlightFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    if (!isNewlyAdded) {
+        Box(modifier = modifier.fillMaxWidth()) {
+            content()
+        }
+        return
+    }
+
+    val isDark = LocalIsDarkTheme.current
+    val highlightColor = if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
+    val scale = remember(itemId) { Animatable(0.92f) }
+    val slideY = remember(itemId) { Animatable(-18f) }
+    val glowAlpha = remember(itemId) { Animatable(0f) }
+    var showBadge by remember(itemId) { mutableStateOf(true) }
+    val latestOnFinished by rememberUpdatedState(onHighlightFinished)
+
+    LaunchedEffect(itemId, isNewlyAdded, isVisibleToUser) {
+        if (!isNewlyAdded || !isVisibleToUser) return@LaunchedEffect
+        scale.snapTo(0.92f)
+        slideY.snapTo(-18f)
+        glowAlpha.snapTo(0.95f)
+        showBadge = true
+
+        // Pop-in + glide-in entrance concurrently
+        coroutineScope {
+            launch {
+                scale.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                )
+            }
+            launch {
+                slideY.animateTo(0f, animationSpec = tween(260, easing = FastOutSlowInEasing))
+            }
+        }
+
+        // Gentle border glow pulse
+        repeat(2) {
+            glowAlpha.animateTo(0.32f, animationSpec = tween(550, easing = FastOutSlowInEasing))
+            glowAlpha.animateTo(0.92f, animationSpec = tween(550, easing = FastOutSlowInEasing))
+        }
+        showBadge = false
+        glowAlpha.animateTo(0f, animationSpec = tween(420, easing = FastOutSlowInEasing))
+        latestOnFinished()
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+                translationY = slideY.value
+            }
+    ) {
+        content()
+
+        if (glowAlpha.value > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .border(
+                        width = 2.2.dp,
+                        color = highlightColor.copy(alpha = glowAlpha.value),
+                        shape = RoundedCornerShape(18.dp)
+                    )
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showBadge && isVisibleToUser,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.85f),
+            exit = fadeOut(tween(320)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 10.dp, end = 48.dp)
+        ) {
+            Surface(
+                color = highlightColor,
+                contentColor = if (isDark) Color(0xFF052E16) else Color.White,
+                shape = RoundedCornerShape(999.dp),
+                shadowElevation = 3.dp
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = LocalAppStrings.current.commonNewBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }

@@ -23,6 +23,7 @@ import com.pocketworker.app.core.ai.ProxyParseResult
 import com.pocketworker.app.core.ai.TouchedFileRef
 import com.pocketworker.app.core.ai.buildAgentSystemPrompt
 import com.pocketworker.app.core.ai.parseAiProxyUrl
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.mcp.McpConfirmationHandler
 import com.pocketworker.app.core.mcp.McpConfirmationRequest
 import com.pocketworker.app.core.mcp.McpErrorCodes
@@ -137,7 +138,7 @@ data class AiChatUiState(
     val activeChatId: String = DEFAULT_CHAT_ID,
     val messagesByChat: Map<String, List<AiChatMessageItem>> = emptyMap(),
     val busyChatId: String? = null,
-    val loadingStatusText: String = "Думает...",
+    val loadingStatusText: String = "",
     val isRollingBack: Boolean = false,
     val pendingConfirmation: PendingToolConfirmation? = null,
     val activeProvider: AiProvider = AiProvider.ANTHROPIC,
@@ -267,7 +268,7 @@ class AiChatViewModel(
 
     fun startNewChat(initialContextKey: String = "") {
         val existingEmpty = _uiState.value.sessions.firstOrNull { session ->
-            session.title == AiChatSession.DEFAULT_TITLE &&
+            session.isUntitledDefault() &&
                 _uiState.value.messagesByChat[session.id].orEmpty().isEmpty()
         }
         if (existingEmpty != null) {
@@ -383,7 +384,8 @@ class AiChatViewModel(
         }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isRollingBack = true, loadingStatusText = "Откат изменений...") }
+            val s = AppLocale.current
+            _uiState.update { it.copy(isRollingBack = true, loadingStatusText = s.aiRollingBack) }
             val rollbackSummary = if (opsToRollback.isNotEmpty() && undoManager != null) {
                 withContext(ioDispatcher) {
                     undoManager.rollbackOperations(opsToRollback)
@@ -423,9 +425,9 @@ class AiChatViewModel(
                 }.orEmpty().replace('\n', ' ').trim().take(64)
 
             val notice = buildString {
-                append("Сообщение возвращено в поле ввода")
+                append(s.aiReturnedToInput)
                 if (rollbackSummary != null && rollbackSummary.appliedOperations > 0) {
-                    append(" • откачено изменений: ${rollbackSummary.appliedOperations}")
+                    append(s.aiRollbackCountSuffix(rollbackSummary.appliedOperations))
                 }
                 if (rollbackSummary != null && rollbackSummary.remoteWarnings.isNotEmpty()) {
                     append("\n${rollbackSummary.remoteWarnings.joinToString("; ")}")
@@ -460,9 +462,10 @@ class AiChatViewModel(
         onLoaded: (DiffDialogState) -> Unit
     ) {
         viewModelScope.launch {
+            val s = AppLocale.current
             val diffText = withContext(ioDispatcher) {
                 undoManager?.loadLiveDiff(file) ?: file.diffSnapshot.ifBlank {
-                    "Нет сохранённого diff для файла ${file.relativePath}."
+                    s.aiNoSavedDiff(file.relativePath)
                 }
             }
             onLoaded(
@@ -484,6 +487,7 @@ class AiChatViewModel(
         if (cleanText.isEmpty() && attachmentsSummary.isEmpty()) return
         if (_uiState.value.busyChatId != null || _uiState.value.isRollingBack) return
 
+        val s = AppLocale.current
         val chatId = _uiState.value.activeChatId
         val aiSettings = preferencesStore.preferences.value.aiSettings
         val provider = aiSettings.provider
@@ -492,14 +496,14 @@ class AiChatViewModel(
         if (locationContext != null) {
             val ctxKey = locationContext.stableContextKey()
             _uiState.update { current ->
-                val updated = current.sessions.map { s ->
-                    if (s.id == chatId) s.copy(lastContextKey = ctxKey) else s
+                val updated = current.sessions.map { sess ->
+                    if (sess.id == chatId) sess.copy(lastContextKey = ctxKey) else sess
                 }
                 current.copy(sessions = updated)
             }
         }
 
-        val userDisplay = cleanText.ifEmpty { "Прикреплены файлы (${attachmentsSummary.size})" }
+        val userDisplay = cleanText.ifEmpty { s.aiAttachedFilesSummary(attachmentsSummary.size) }
         val userMessageItem = AiChatMessageItem.UserMessage(
             text = userDisplay,
             attachmentNames = attachmentsSummary
@@ -512,7 +516,7 @@ class AiChatViewModel(
             appendMessage(
                 chatId = chatId,
                 item = AiChatMessageItem.ErrorNotice(
-                    message = "Клиент для ${provider.displayName} пока не подключён. Выберите доступного провайдера в «Настройки → Агент».",
+                    message = s.aiProviderNotConnected(provider.displayName),
                     showSettingsAction = true
                 )
             )
@@ -527,7 +531,7 @@ class AiChatViewModel(
                 appendMessage(
                     chatId = chatId,
                     item = AiChatMessageItem.ErrorNotice(
-                        message = "Локальная модель «${modelOption.label}» ещё не скачана. Откройте «Настройки → Агент» и нажмите «Скачать модель».",
+                        message = s.aiLocalModelNotDownloaded(modelOption.label),
                         showSettingsAction = true
                     )
                 )
@@ -543,7 +547,7 @@ class AiChatViewModel(
                 appendMessage(
                     chatId = chatId,
                     item = AiChatMessageItem.ErrorNotice(
-                        message = "Не указан API-ключ $keyHint. Добавьте ключ в «Настройки → Агент».",
+                        message = s.aiMissingApiKey(keyHint),
                         showSettingsAction = true
                     )
                 )
@@ -559,7 +563,7 @@ class AiChatViewModel(
                         appendMessage(
                             chatId = chatId,
                             item = AiChatMessageItem.ErrorNotice(
-                                message = "Прокси включён, но адрес некорректен: ${parsed.message}",
+                                message = s.aiInvalidProxy(parsed.message),
                                 showSettingsAction = true
                             )
                         )
@@ -607,9 +611,9 @@ class AiChatViewModel(
         val turnTouchedFiles = linkedMapOf<String, TouchedFileRef>()
 
         val initialLoadingText = if (provider == AiProvider.LOCAL && localGemmaClient?.isModelLoaded(modelOption.id) == false) {
-            "Загружаю локальную модель..."
+            s.aiLoadingLocalModel
         } else {
-            "Думает..."
+            s.aiThinking
         }
 
         activeJob = viewModelScope.launch {
@@ -651,7 +655,7 @@ class AiChatViewModel(
             } catch (ex: Throwable) {
                 finishStreamingBubbles(chatId)
                 interruptingError = AiChatMessageItem.ErrorNotice(
-                    message = ex.localizedMessage ?: "Непредвиденная ошибка агента.",
+                    message = ex.localizedMessage ?: s.aiUnexpectedError,
                     showSettingsAction = false
                 )
             } finally {
@@ -716,7 +720,8 @@ class AiChatViewModel(
     }
 
     private fun currentSessionTitle(chatId: String): String {
-        return _uiState.value.sessions.firstOrNull { it.id == chatId }?.title ?: AiChatSession.DEFAULT_TITLE
+        val s = AppLocale.current
+        return _uiState.value.sessions.firstOrNull { it.id == chatId }?.localizedTitle(s) ?: s.aiNewChat
     }
 
     private fun updateLoadingStatus(chatId: String, statusText: String) {
@@ -747,17 +752,18 @@ class AiChatViewModel(
         while (step < MAX_TOOL_STEPS) {
             step++
             if (step == 1) {
+                val s = AppLocale.current
                 val firstStatus = if (localGemmaClient != null &&
                     preferencesStore.preferences.value.aiSettings.provider == AiProvider.LOCAL &&
                     !localGemmaClient.isModelLoaded(modelId)
                 ) {
-                    "Загружаю локальную модель..."
+                    s.aiLoadingLocalModel
                 } else {
-                    "Думает..."
+                    s.aiThinking
                 }
                 updateLoadingStatus(chatId, firstStatus)
             } else {
-                updateLoadingStatus(chatId, "Анализирует результат...")
+                updateLoadingStatus(chatId, AppLocale.current.aiAnalyzingResult)
             }
             val request = LlmRequest(
                 model = modelId,
@@ -788,7 +794,7 @@ class AiChatViewModel(
                                 if (bubbleId == null) {
                                     // Avoid creating empty whitespace-only AI bubbles before tool calls
                                     if (currentText.isNotBlank()) {
-                                        updateLoadingStatus(chatId, "Отвечает...")
+                                        updateLoadingStatus(chatId, AppLocale.current.aiResponding)
                                         val newId = UUID.randomUUID().toString()
                                         streamingBubbleId = newId
                                         appendMessage(
@@ -802,7 +808,7 @@ class AiChatViewModel(
                                         )
                                     }
                                 } else {
-                                    updateLoadingStatus(chatId, "Отвечает...")
+                                    updateLoadingStatus(chatId, AppLocale.current.aiResponding)
                                     updateMessage(chatId, bubbleId) { item ->
                                         if (item is AiChatMessageItem.AssistantText) {
                                             item.copy(text = currentText.trimStart(), isStreaming = true)
@@ -856,10 +862,14 @@ class AiChatViewModel(
                                 val parsedArgs = runCatching { JSONObject(event.call.argumentsJson) }.getOrElse { JSONObject() }
                                 val prettyArgs = runCatching { parsedArgs.toString(2) }.getOrDefault(event.call.argumentsJson)
                                 val subtitle = extractToolSubtitle(event.call.name, parsedArgs)
+                                val meta = describeToolStart(event.call.name, isWebSearch = false)
                                 if (cardId != null) {
                                     updateMessage(chatId, cardId) { item ->
                                         if (item is AiChatMessageItem.ToolActivity) {
                                             item.copy(
+                                                toolName = event.call.name,
+                                                category = meta.category,
+                                                title = meta.runningTitle,
                                                 subtitle = subtitle,
                                                 argumentsPreview = prettyArgs,
                                                 status = ToolActivityStatus.RUNNING
@@ -870,7 +880,6 @@ class AiChatViewModel(
                                     val newCardId = UUID.randomUUID().toString()
                                     toolCardIdsByCallId[event.call.id] = newCardId
                                     turnToolCardIds.add(newCardId)
-                                    val meta = describeToolStart(event.call.name, isWebSearch = false)
                                     appendMessage(
                                         chatId = chatId,
                                         item = AiChatMessageItem.ToolActivity(
@@ -893,10 +902,11 @@ class AiChatViewModel(
 
                             is LlmStreamEvent.WebSearchUpdate -> {
                                 val cardId = toolCardIdsByCallId[event.id] ?: return@collect
+                                val s = AppLocale.current
                                 updateMessage(chatId, cardId) { item ->
                                     if (item is AiChatMessageItem.ToolActivity) {
                                         item.copy(
-                                            title = if (event.finished) "Поиск в сети завершён" else "Ищу в сети...",
+                                            title = if (event.finished) s.aiWebSearchDone else s.aiWebSearchRunning,
                                             subtitle = event.query?.let { "«$it»" } ?: item.subtitle,
                                             status = if (event.finished) ToolActivityStatus.SUCCEEDED else ToolActivityStatus.RUNNING
                                         )
@@ -972,12 +982,13 @@ class AiChatViewModel(
                 } else null
 
                 val confirmationHandler = McpConfirmationHandler { req ->
-                    updateLoadingStatus(chatId, "Ожидаю подтверждение: ${req.summary}")
+                    val s = AppLocale.current
+                    updateLoadingStatus(chatId, s.aiWaitingConfirmationStatus(req.summary))
                     if (cardId != null) {
                         updateMessage(chatId, cardId) { item ->
                             if (item is AiChatMessageItem.ToolActivity) {
                                 item.copy(
-                                    title = "Ожидаю подтверждение...",
+                                    title = s.aiWaitingConfirmationTitle,
                                     subtitle = req.summary,
                                     status = ToolActivityStatus.AWAITING_CONFIRMATION
                                 )
@@ -1042,11 +1053,12 @@ class AiChatViewModel(
                 }
 
                 if (cardId != null) {
+                    val s = AppLocale.current
                     val (finalStatus, finalTitle) = when {
                         result.ok -> ToolActivityStatus.SUCCEEDED to meta.doneTitle
                         result.error?.errorCode == McpErrorCodes.USER_REJECTED ->
-                            ToolActivityStatus.REJECTED to "Отменено пользователем"
-                        else -> ToolActivityStatus.FAILED to "Ошибка: ${result.error?.errorCode ?: call.name}"
+                            ToolActivityStatus.REJECTED to s.aiRejectedByUser
+                        else -> ToolActivityStatus.FAILED to s.aiToolErrorTitle(result.error?.errorCode ?: call.name)
                     }
                     updateMessage(chatId, cardId) { item ->
                         if (item is AiChatMessageItem.ToolActivity) {
@@ -1071,7 +1083,7 @@ class AiChatViewModel(
         }
 
         return AiChatMessageItem.ErrorNotice(
-            message = "Достигнут лимит шагов агента ($MAX_TOOL_STEPS) за один запрос. Вы можете продолжить диалог новым сообщением.",
+            message = AppLocale.current.aiMaxStepsReached(MAX_TOOL_STEPS),
             showSettingsAction = false
         )
     }
@@ -1210,7 +1222,7 @@ class AiChatViewModel(
         _uiState.update { current ->
             val updatedSessions = current.sessions.map { s ->
                 if (s.id == chatId) {
-                    val nextTitle = if (s.title == AiChatSession.DEFAULT_TITLE && autoTitle.isNotBlank()) {
+                    val nextTitle = if (s.isUntitledDefault() && autoTitle.isNotBlank()) {
                         autoTitle
                     } else s.title
                     s.copy(title = nextTitle, preview = compact.take(64))
@@ -1258,55 +1270,32 @@ class AiChatViewModel(
     )
 
     private fun describeToolStart(toolName: String, isWebSearch: Boolean): ToolVisualMeta {
+        val s = AppLocale.current
         if (isWebSearch || toolName.contains("web_search", ignoreCase = true)) {
-            return ToolVisualMeta(ToolActivityCategory.WEB_SEARCH, "Ищу в сети...", "Поиск в сети завершён")
+            return ToolVisualMeta(ToolActivityCategory.WEB_SEARCH, s.aiWebSearchRunning, s.aiWebSearchDone)
         }
-        return when (toolName) {
-            "workspace_get_context" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Смотрю контекст...", "Контекст получен")
-            "workspace_list_projects" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Смотрю проекты...", "Список проектов получен")
-            "workspace_create_project" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Создаю проект...", "Проект создан")
-            "workspace_list_repos" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Смотрю репозитории...", "Репозитории получены")
-            "workspace_create_repo" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Создаю репозиторий...", "Репозиторий создан")
-            "workspace_clone_repo" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Клонирую репозиторий...", "Репозиторий клонирован")
-            "workspace_discover_group_repos" ->
-                ToolVisualMeta(ToolActivityCategory.SEARCHING, "Ищу репозитории в группе...", "Репозитории найдены")
-            "fs_get_repo_overview" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Изучаю репозиторий...", "Обзор репозитория готов")
-            "fs_list_dir" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Смотрю папку...", "Папка прочитана")
-            "fs_find_files" ->
-                ToolVisualMeta(ToolActivityCategory.SEARCHING, "Ищу файлы...", "Файлы найдены")
-            "fs_grep" ->
-                ToolVisualMeta(ToolActivityCategory.SEARCHING, "Ищу в коде...", "Поиск в коде завершён")
-            "fs_read_file" ->
-                ToolVisualMeta(ToolActivityCategory.READING, "Читаю файл...", "Файл прочитан")
-            "fs_edit_file" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Редактирую файл...", "Файл изменён")
-            "fs_write_file" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Записываю файл...", "Файл сохранён")
-            "fs_replace_across_files" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Заменяю по файлам...", "Замена выполнена")
-            "fs_manage_structure" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Меняю структуру папок...", "Структура обновлена")
-            "fs_delete_entry" ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Удаляю...", "Удалено")
-            "git_exec" ->
-                ToolVisualMeta(ToolActivityCategory.GIT, "Выполняю Git...", "Git-команда выполнена")
-            "check_push_readiness" ->
-                ToolVisualMeta(ToolActivityCategory.CHECKING, "Проверяю готовность к push...", "Проверка push завершена")
-            "check_merge_conflicts" ->
-                ToolVisualMeta(ToolActivityCategory.CHECKING, "Проверяю конфликты...", "Проверка конфликтов завершена")
-            "check_file_syntax" ->
-                ToolVisualMeta(ToolActivityCategory.CHECKING, "Проверяю синтаксис...", "Синтаксис проверен")
-            else ->
-                ToolVisualMeta(ToolActivityCategory.DOING, "Выполняю $toolName...", "Выполнено: $toolName")
+        val category = when (toolName) {
+            "workspace_get_context",
+            "workspace_list_projects",
+            "workspace_list_repos",
+            "fs_get_repo_overview",
+            "fs_list_dir",
+            "fs_read_file" -> ToolActivityCategory.READING
+
+            "workspace_discover_group_repos",
+            "fs_find_files",
+            "fs_grep" -> ToolActivityCategory.SEARCHING
+
+            "git_exec" -> ToolActivityCategory.GIT
+
+            "check_push_readiness",
+            "check_merge_conflicts",
+            "check_file_syntax" -> ToolActivityCategory.CHECKING
+
+            else -> ToolActivityCategory.DOING
         }
+        val (runningTitle, doneTitle) = s.aiToolStatus(toolName)
+        return ToolVisualMeta(category, runningTitle, doneTitle)
     }
 
     private fun extractToolSubtitle(toolName: String, args: JSONObject): String = when (toolName) {
@@ -1334,7 +1323,8 @@ class AiChatViewModel(
         "check_file_syntax" ->
             args.optString("path", "").ifBlank {
                 val arr = args.optJSONArray("paths")
-                if (arr != null && arr.length() > 0) "${arr.length()} файл(ов)" else "изменённые файлы"
+                val s = AppLocale.current
+                if (arr != null && arr.length() > 0) s.aiSyntaxFilesCount(arr.length()) else s.aiSyntaxChangedFiles
             }
         else -> ""
     }

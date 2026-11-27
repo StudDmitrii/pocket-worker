@@ -101,8 +101,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -138,6 +136,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -145,11 +144,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketworker.app.core.ai.AiAgentNotificationConstants
 import com.pocketworker.app.core.ai.ChangedFileSummary
+import com.pocketworker.app.core.i18n.AppLocale
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.core.mcp.McpPermissionTier
+import com.pocketworker.app.ui.common.TopNotificationHost
 import com.pocketworker.app.ui.common.WorkspaceBackdrop
 import com.pocketworker.app.ui.common.backdropCardBorderColor
 import com.pocketworker.app.ui.common.backdropCardContainerColor
 import com.pocketworker.app.ui.common.formatFileSize
+import com.pocketworker.app.ui.common.rememberTopNotificationState
 import com.pocketworker.app.ui.theme.GitSemanticColors
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 import com.pocketworker.app.ui.workspace.DiffDialogState
@@ -382,10 +385,11 @@ private fun AiChatContent(
     onReturnToFolders: (originPx: Offset?) -> Unit,
     settingsOverlayContent: @Composable (onBack: () -> Unit) -> Unit
 ) {
+    val s = LocalAppStrings.current
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val notificationState = rememberTopNotificationState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
 
@@ -395,18 +399,18 @@ private fun AiChatContent(
             ?: AiChatSession(id = uiState.activeChatId, title = AiChatSession.DEFAULT_TITLE)
     }
     val messages = uiState.activeMessages
-    val greetingMessage = remember(locationContext) {
-        buildAiGreetingMessage(locationContext)
+    val emptyStatePrompt = remember(locationContext, s) {
+        buildAiEmptyStatePrompt(locationContext, s)
     }
-    val contextSubtitle = remember(locationContext) {
-        formatAiContextSubtitle(locationContext)
+    val contextSubtitle = remember(locationContext, s) {
+        formatAiContextSubtitle(locationContext, s)
     }
     val showLoaderBubble = uiState.isActiveChatBusy &&
         (uiState.pendingConfirmation == null || uiState.pendingConfirmation.chatId != uiState.activeChatId)
 
     LaunchedEffect(uiState.infoMessage) {
         val msg = uiState.infoMessage ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(msg)
+        notificationState.show(msg)
         onClearInfoMessage()
     }
 
@@ -424,8 +428,8 @@ private fun AiChatContent(
 
     // Always jump to bottom when switching chats
     LaunchedEffect(uiState.activeChatId) {
-        val totalItems = messages.size + 1 + if (showLoaderBubble) 1 else 0
-        if (totalItems > 1) {
+        val totalItems = messages.size + if (showLoaderBubble) 1 else 0
+        if (totalItems > 0) {
             listState.scrollToItem(totalItems - 1)
         }
     }
@@ -447,9 +451,9 @@ private fun AiChatContent(
         showLoaderBubble,
         uiState.loadingStatusText
     ) {
-        val totalItems = messages.size + 1 + if (showLoaderBubble) 1 else 0
+        val totalItems = messages.size + if (showLoaderBubble) 1 else 0
         val userJustSent = messages.lastOrNull() is AiChatMessageItem.UserMessage
-        if (totalItems > 1 && (userJustSent || !showScrollToBottom)) {
+        if (totalItems > 0 && (userJustSent || !showScrollToBottom)) {
             listState.scrollToItem(totalItems - 1)
         }
     }
@@ -530,7 +534,7 @@ private fun AiChatContent(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Menu,
-                                        contentDescription = "Меню чатов"
+                                        contentDescription = s.aiChatDrawerDesc
                                     )
                                 }
                             },
@@ -545,7 +549,7 @@ private fun AiChatContent(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
-                                            text = activeChat.title,
+                                            text = activeChat.localizedTitle(s),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
@@ -570,21 +574,23 @@ private fun AiChatContent(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Settings,
-                                        contentDescription = "Настройки"
+                                        contentDescription = s.commonSettings
                                     )
                                 }
                             }
                         )
-                    },
-                    snackbarHost = { SnackbarHost(snackbarHostState) }
+                    }
                 ) { padding ->
-                    Column(
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
                             .consumeWindowInsets(padding)
                             .imePadding()
                     ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
                         Box(
@@ -592,60 +598,61 @@ private fun AiChatContent(
                                 .weight(1f)
                                 .fillMaxWidth()
                         ) {
-                            LazyColumn(
-                                state = listState,
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(
-                                    start = 14.dp,
-                                    end = 14.dp,
-                                    top = 14.dp,
-                                    bottom = 24.dp
-                                ),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                item(key = "greeting_${activeChat.id}") {
-                                    AiGreetingBubble(
-                                        message = greetingMessage,
-                                        modelBadge = "${uiState.activeProvider.displayName} • ${uiState.activeModelLabel}"
-                                    )
-                                }
-
-                                items(messages, key = { it.id }) { item ->
-                                    when (item) {
-                                        is AiChatMessageItem.UserMessage -> UserMessageBubble(
-                                            item = item,
-                                            retryEnabled = !uiState.isActiveChatBusy,
-                                            onRetryClick = {
-                                                focusManager.clearFocus()
-                                                onRetryUserMessage(item.id)
+                            if (messages.isEmpty() && !showLoaderBubble) {
+                                AiEmptyChatWelcome(
+                                    promptText = emptyStatePrompt,
+                                    modelBadge = "${uiState.activeProvider.displayName} • ${uiState.activeModelLabel}",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(
+                                        start = 14.dp,
+                                        end = 14.dp,
+                                        top = 14.dp,
+                                        bottom = 24.dp
+                                    ),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(messages, key = { it.id }) { item ->
+                                        when (item) {
+                                            is AiChatMessageItem.UserMessage -> UserMessageBubble(
+                                                item = item,
+                                                retryEnabled = !uiState.isActiveChatBusy,
+                                                onRetryClick = {
+                                                    focusManager.clearFocus()
+                                                    onRetryUserMessage(item.id)
+                                                }
+                                            )
+                                            is AiChatMessageItem.AssistantText -> AssistantTextBubble(item)
+                                            is AiChatMessageItem.ToolActivity -> ToolActivityMessageCard(item)
+                                            is AiChatMessageItem.ActionsGroup -> {
+                                                if (item.actions.size == 1) {
+                                                    ToolActivityMessageCard(item.actions.single())
+                                                } else {
+                                                    ActionsGroupCard(item)
+                                                }
                                             }
-                                        )
-                                        is AiChatMessageItem.AssistantText -> AssistantTextBubble(item)
-                                        is AiChatMessageItem.ToolActivity -> ToolActivityMessageCard(item)
-                                        is AiChatMessageItem.ActionsGroup -> {
-                                            if (item.actions.size == 1) {
-                                                ToolActivityMessageCard(item.actions.single())
-                                            } else {
-                                                ActionsGroupCard(item)
-                                            }
+                                            is AiChatMessageItem.ChangedFilesCard -> ChangedFilesCardSection(
+                                                item = item,
+                                                onFileClick = onOpenChangedFileDiff
+                                            )
+                                            is AiChatMessageItem.ErrorNotice -> ErrorNoticeBubble(
+                                                item = item,
+                                                onOpenSettings = {
+                                                    focusManager.clearFocus()
+                                                    onShowSettingsChange(true)
+                                                }
+                                            )
                                         }
-                                        is AiChatMessageItem.ChangedFilesCard -> ChangedFilesCardSection(
-                                            item = item,
-                                            onFileClick = onOpenChangedFileDiff
-                                        )
-                                        is AiChatMessageItem.ErrorNotice -> ErrorNoticeBubble(
-                                            item = item,
-                                            onOpenSettings = {
-                                                focusManager.clearFocus()
-                                                onShowSettingsChange(true)
-                                            }
-                                        )
                                     }
-                                }
 
-                                if (showLoaderBubble) {
-                                    item(key = "ai_loading_indicator") {
-                                        AiThinkingLoaderBubble(statusText = uiState.loadingStatusText)
+                                    if (showLoaderBubble) {
+                                        item(key = "ai_loading_indicator") {
+                                            AiThinkingLoaderBubble(statusText = uiState.loadingStatusText)
+                                        }
                                     }
                                 }
                             }
@@ -684,12 +691,12 @@ private fun AiChatContent(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Rounded.KeyboardArrowDown,
-                                            contentDescription = "Прокрутить вниз",
+                                            contentDescription = s.aiScrollToBottomDesc,
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
-                                            text = "Вниз",
+                                            text = s.aiScrollToBottomLabel,
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = MaterialTheme.colorScheme.onSurface
@@ -741,6 +748,12 @@ private fun AiChatContent(
                             onStopClick = onStopGeneration
                         )
                     }
+
+                        TopNotificationHost(
+                            state = notificationState,
+                            modifier = Modifier.align(Alignment.TopCenter)
+                        )
+                    }
                 }
             }
         }
@@ -783,6 +796,7 @@ private fun AiChatHistoryDrawerSheet(
     onRenameChat: (String, String) -> Unit,
     onDeleteChat: (String) -> Unit
 ) {
+    val s = LocalAppStrings.current
     var renamingSession by remember { mutableStateOf<AiChatSession?>(null) }
     var renameInput by remember { mutableStateOf("") }
     var deletingSession by remember { mutableStateOf<AiChatSession?>(null) }
@@ -794,7 +808,7 @@ private fun AiChatHistoryDrawerSheet(
         Spacer(modifier = Modifier.height(14.dp))
 
         Text(
-            text = "История чатов",
+            text = s.aiChatHistoryTitle,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -814,7 +828,7 @@ private fun AiChatHistoryDrawerSheet(
                     label = {
                         Column {
                             Text(
-                                text = session.title,
+                                text = session.localizedTitle(s),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -837,13 +851,13 @@ private fun AiChatHistoryDrawerSheet(
                             IconButton(
                                 onClick = {
                                     renamingSession = session
-                                    renameInput = session.title
+                                    renameInput = session.localizedTitle(s)
                                 },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Edit,
-                                    contentDescription = "Переименовать чат",
+                                    contentDescription = s.aiRenameChatTitle,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -855,7 +869,7 @@ private fun AiChatHistoryDrawerSheet(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.DeleteOutline,
-                                        contentDescription = "Удалить чат",
+                                        contentDescription = s.aiDeleteChatDesc,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(17.dp)
                                     )
@@ -872,7 +886,7 @@ private fun AiChatHistoryDrawerSheet(
             if (chatSessions.size <= 1) {
                 item(key = "history_empty_hint") {
                     Text(
-                        text = "История чатов сохраняется локально на устройстве",
+                        text = s.aiChatHistoryLocalHint,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
@@ -898,7 +912,7 @@ private fun AiChatHistoryDrawerSheet(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Новый чат",
+                text = s.aiNewChat,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold
             )
@@ -908,12 +922,12 @@ private fun AiChatHistoryDrawerSheet(
     renamingSession?.let { target ->
         AlertDialog(
             onDismissRequest = { renamingSession = null },
-            title = { Text("Переименовать чат") },
+            title = { Text(s.aiRenameChatTitle) },
             text = {
                 OutlinedTextField(
                     value = renameInput,
                     onValueChange = { renameInput = it },
-                    label = { Text("Название чата") },
+                    label = { Text(s.aiRenameChatLabel) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -926,12 +940,12 @@ private fun AiChatHistoryDrawerSheet(
                     },
                     enabled = renameInput.isNotBlank()
                 ) {
-                    Text("Сохранить")
+                    Text(s.commonSave)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { renamingSession = null }) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
             }
         )
@@ -940,10 +954,10 @@ private fun AiChatHistoryDrawerSheet(
     deletingSession?.let { target ->
         AlertDialog(
             onDismissRequest = { deletingSession = null },
-            title = { Text("Удалить диалог?") },
+            title = { Text(s.aiDeleteDialogTitle) },
             text = {
                 Text(
-                    text = "Диалог «${target.title}» и вся его история сообщений будут удалены без возможности восстановления."
+                    text = s.aiDeleteDialogBody(target.localizedTitle(s))
                 )
             },
             confirmButton = {
@@ -957,12 +971,12 @@ private fun AiChatHistoryDrawerSheet(
                         contentColor = MaterialTheme.colorScheme.onError
                     )
                 ) {
-                    Text("Удалить")
+                    Text(s.commonDelete)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deletingSession = null }) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
             }
         )
@@ -970,43 +984,44 @@ private fun AiChatHistoryDrawerSheet(
 }
 
 @Composable
-private fun AiGreetingBubble(
-    message: String,
-    modelBadge: String
+private fun AiEmptyChatWelcome(
+    promptText: String,
+    modelBadge: String,
+    modifier: Modifier = Modifier
 ) {
     val isDark = LocalIsDarkTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(end = 24.dp),
-        horizontalArrangement = Arrangement.Start
+    Box(
+        modifier = modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 4.dp,
-                topEnd = 18.dp,
-                bottomStart = 18.dp,
-                bottomEnd = 18.dp
-            ),
-            color = backdropCardContainerColor(isDark),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            border = BorderStroke(1.dp, backdropCardBorderColor(isDark)),
-            modifier = Modifier.widthIn(max = 360.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            IridescentAiOrb(
+                size = 68.dp,
+                label = "AI",
+                textSize = 18.sp,
+                glowIntensity = 0.72f
+            )
+            Text(
+                text = promptText,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Surface(
+                shape = CircleShape,
+                color = backdropCardContainerColor(isDark),
+                border = BorderStroke(1.dp, backdropCardBorderColor(isDark))
             ) {
                 Text(
                     text = modelBadge,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                 )
             }
         }
@@ -1019,6 +1034,7 @@ private fun UserMessageBubble(
     retryEnabled: Boolean,
     onRetryClick: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     var retryMenuExpanded by remember(item.id) { mutableStateOf(false) }
 
     Row(
@@ -1060,7 +1076,7 @@ private fun UserMessageBubble(
                     )
                     if (item.attachmentNames.isNotEmpty()) {
                         Text(
-                            text = "Файлы: ${item.attachmentNames.joinToString(", ")}",
+                            text = s.aiAttachedFilesLine(item.attachmentNames.joinToString(", ")),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                         )
@@ -1083,12 +1099,12 @@ private fun UserMessageBubble(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = "Повторить",
+                                text = s.commonRetry,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "Откатить изменения и вернуть в поле ввода",
+                                text = s.aiRetrySubtitle,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1106,6 +1122,7 @@ private fun UserMessageBubble(
 
 @Composable
 private fun AssistantTextBubble(item: AiChatMessageItem.AssistantText) {
+    val s = LocalAppStrings.current
     val isDark = LocalIsDarkTheme.current
     val clipboardManager = LocalClipboardManager.current
     var copiedMessage by remember(item.id) { mutableStateOf(false) }
@@ -1152,7 +1169,7 @@ private fun AssistantTextBubble(item: AiChatMessageItem.AssistantText) {
                     if (!item.isStreaming && item.text.isNotBlank()) {
                         Icon(
                             imageVector = if (copiedMessage) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                            contentDescription = "Копировать ответ",
+                            contentDescription = s.aiCopyResponseDesc,
                             tint = if (copiedMessage) {
                                 if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
                             } else {
@@ -1184,6 +1201,7 @@ internal fun ActionsGroupCard(
     item: AiChatMessageItem.ActionsGroup,
     interactive: Boolean = true
 ) {
+    val s = LocalAppStrings.current
     val isDark = LocalIsDarkTheme.current
     var expanded by remember(item.id) { mutableStateOf(false) }
 
@@ -1237,7 +1255,7 @@ internal fun ActionsGroupCard(
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Действия (${item.actions.size})",
+                            text = s.aiActionsGroupTitle(item.actions.size),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -1254,7 +1272,7 @@ internal fun ActionsGroupCard(
                     }
                     Icon(
                         imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                        contentDescription = if (expanded) "Свернуть действия" else "Развернуть действия",
+                        contentDescription = if (expanded) s.aiCollapseActionsDesc else s.aiExpandActionsDesc,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -1332,12 +1350,13 @@ internal fun ChangedFilesCardSection(
     }
 
     // Multiple changed files: collapsible group card matching ActionsGroupCard
+    val s = LocalAppStrings.current
     var expanded by remember(item.id) { mutableStateOf(false) }
     val totalAdded = remember(item.files) { item.files.sumOf { it.addedLines } }
     val totalDeleted = remember(item.files) { item.files.sumOf { it.deletedLines } }
-    val compactFilesSummary = remember(item.files) {
+    val compactFilesSummary = remember(item.files, s) {
         val names = item.files.take(3).joinToString(", ") { it.relativePath.substringAfterLast('/') }
-        if (item.files.size > 3) "$names и ещё ${item.files.size - 3}" else names
+        if (item.files.size > 3) s.aiChangedFilesMore(names, item.files.size - 3) else names
     }
 
     Row(
@@ -1372,7 +1391,7 @@ internal fun ChangedFilesCardSection(
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Изменённые файлы (${item.files.size})",
+                            text = s.aiChangedFilesGroupTitle(item.files.size),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -1407,7 +1426,7 @@ internal fun ChangedFilesCardSection(
                         )
                         Icon(
                             imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                            contentDescription = if (expanded) "Свернуть файлы" else "Развернуть файлы",
+                            contentDescription = if (expanded) s.aiCollapseFilesDesc else s.aiExpandFilesDesc,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
@@ -1530,7 +1549,7 @@ private fun ChangedFileRowCard(
                 )
                 Icon(
                     imageVector = Icons.Rounded.ChevronRight,
-                    contentDescription = "Открыть diff",
+                    contentDescription = LocalAppStrings.current.aiOpenDiffDesc,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
@@ -1541,6 +1560,7 @@ private fun ChangedFileRowCard(
 
 @Composable
 private fun AiThinkingLoaderBubble(statusText: String) {
+    val s = LocalAppStrings.current
     val isDark = LocalIsDarkTheme.current
     Row(
         modifier = Modifier
@@ -1570,7 +1590,7 @@ private fun AiThinkingLoaderBubble(statusText: String) {
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = statusText.ifBlank { "Думает..." },
+                    text = statusText.ifBlank { s.aiThinking },
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1585,6 +1605,7 @@ private fun ToolActivityMessageCard(
     item: AiChatMessageItem.ToolActivity,
     nested: Boolean = false
 ) {
+    val s = LocalAppStrings.current
     val isDark = LocalIsDarkTheme.current
     var expanded by remember(item.id) { mutableStateOf(false) }
 
@@ -1646,7 +1667,7 @@ private fun ToolActivityMessageCard(
                         ToolActivityStatus.SUCCEEDED -> {
                             Icon(
                                 imageVector = Icons.Rounded.CheckCircle,
-                                contentDescription = "Выполнено",
+                                contentDescription = s.commonDone,
                                 tint = accentColor,
                                 modifier = Modifier.size(17.dp)
                             )
@@ -1654,7 +1675,7 @@ private fun ToolActivityMessageCard(
                         ToolActivityStatus.AWAITING_CONFIRMATION -> {
                             Icon(
                                 imageVector = Icons.Rounded.Security,
-                                contentDescription = "Подтверждение",
+                                contentDescription = s.commonConfirmation,
                                 tint = accentColor,
                                 modifier = Modifier.size(17.dp)
                             )
@@ -1662,7 +1683,7 @@ private fun ToolActivityMessageCard(
                         ToolActivityStatus.FAILED, ToolActivityStatus.REJECTED -> {
                             Icon(
                                 imageVector = Icons.Rounded.ErrorOutline,
-                                contentDescription = "Ошибка",
+                                contentDescription = s.commonError,
                                 tint = accentColor,
                                 modifier = Modifier.size(17.dp)
                             )
@@ -1700,7 +1721,7 @@ private fun ToolActivityMessageCard(
                     if (hasDetails) {
                         Icon(
                             imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                            contentDescription = if (expanded) "Свернуть детали" else "Показать детали",
+                            contentDescription = if (expanded) s.aiCollapseDetailsDesc else s.aiExpandDetailsDesc,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
@@ -1718,14 +1739,14 @@ private fun ToolActivityMessageCard(
                     ) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                         Text(
-                            text = "Инструмент: ${item.toolName}",
+                            text = s.aiToolLabel(item.toolName),
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.primary
                         )
                         if (item.argumentsPreview.isNotBlank()) {
                             Text(
-                                text = "Параметры:\n${item.argumentsPreview.take(900)}",
+                                text = s.aiParamsLabel(item.argumentsPreview.take(900)),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1733,7 +1754,7 @@ private fun ToolActivityMessageCard(
                         }
                         if (!item.resultPreview.isNullOrBlank()) {
                             Text(
-                                text = "Результат:\n${item.resultPreview.take(1200)}",
+                                text = s.aiResultLabel(item.resultPreview.take(1200)),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -1751,6 +1772,7 @@ private fun ErrorNoticeBubble(
     item: AiChatMessageItem.ErrorNotice,
     onOpenSettings: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.88f),
@@ -1770,7 +1792,7 @@ private fun ErrorNoticeBubble(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ErrorOutline,
-                    contentDescription = "Ошибка",
+                    contentDescription = s.commonError,
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier
                         .padding(top = 1.dp)
@@ -1789,7 +1811,7 @@ private fun ErrorNoticeBubble(
                     modifier = Modifier.align(Alignment.End)
                 ) {
                     Text(
-                        text = "Открыть настройки агента",
+                        text = s.aiOpenAgentSettings,
                         color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -1805,6 +1827,7 @@ private fun ToolConfirmationCard(
     onApprove: () -> Unit,
     onReject: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val isDangerous = pending.request.tier == McpPermissionTier.ALWAYS_CONFIRM
     val borderColor = if (isDangerous) {
         MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
@@ -1847,7 +1870,7 @@ private fun ToolConfirmationCard(
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = if (isDangerous) "Требуется подтверждение (опасное действие)" else "Подтвердите действие агента",
+                    text = if (isDangerous) s.aiConfirmDangerousTitle else s.aiConfirmNormalTitle,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = titleColor
@@ -1872,7 +1895,7 @@ private fun ToolConfirmationCard(
                     onClick = onReject,
                     modifier = Modifier.heightIn(min = 40.dp)
                 ) {
-                    Text("Отмена")
+                    Text(s.commonCancel)
                 }
                 Button(
                     onClick = onApprove,
@@ -1886,7 +1909,7 @@ private fun ToolConfirmationCard(
                     },
                     modifier = Modifier.heightIn(min = 40.dp)
                 ) {
-                    Text("Разрешить")
+                    Text(s.commonAllow)
                 }
             }
         }
@@ -1904,6 +1927,7 @@ private fun AiMessageComposer(
     onSendClick: () -> Unit,
     onStopClick: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val isDark = LocalIsDarkTheme.current
     val canSend = !isBusy && (text.isNotBlank() || attachedFiles.isNotEmpty())
 
@@ -1942,7 +1966,7 @@ private fun AiMessageComposer(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.AttachFile,
-                        contentDescription = "Прикрепить файл",
+                        contentDescription = s.aiAttachFileDesc,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1951,7 +1975,7 @@ private fun AiMessageComposer(
                     value = text,
                     onValueChange = onTextChange,
                     placeholder = {
-                        Text(if (isBusy) "Агент работает..." else "Напишите сообщение...")
+                        Text(if (isBusy) s.aiInputPlaceholderBusy else s.aiInputPlaceholderIdle)
                     },
                     maxLines = 5,
                     shape = RoundedCornerShape(24.dp),
@@ -1980,7 +2004,7 @@ private fun AiMessageComposer(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Stop,
-                            contentDescription = "Остановить"
+                            contentDescription = s.commonStop
                         )
                     }
                 } else {
@@ -1994,7 +2018,7 @@ private fun AiMessageComposer(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.Send,
-                            contentDescription = "Отправить"
+                            contentDescription = s.commonSend
                         )
                     }
                 }
@@ -2008,6 +2032,7 @@ private fun AttachedFileChip(
     file: AttachedFile,
     onRemove: () -> Unit
 ) {
+    val s = LocalAppStrings.current
     val icon = when {
         file.mimeType?.startsWith("image/") == true -> Icons.Rounded.Image
         file.mimeType?.startsWith("text/") == true -> Icons.Rounded.Description
@@ -2057,7 +2082,7 @@ private fun AttachedFileChip(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Убрать файл",
+                    contentDescription = s.aiRemoveAttachmentDesc,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
@@ -2106,6 +2131,7 @@ private fun buildAttachmentContextText(
     context: Context,
     files: List<AttachedFile>
 ): String {
+    val s = AppLocale.current
     val sb = StringBuilder()
     files.take(3).forEach { file ->
         val isLikelyText = file.mimeType?.startsWith("text/") == true ||
@@ -2123,15 +2149,15 @@ private fun buildAttachmentContextText(
                 }
             }.getOrNull()
             if (!snippet.isNullOrBlank()) {
-                sb.appendLine("[Прикреплённый файл: ${file.name}]")
+                sb.appendLine(s.aiAttachedFileHeader(file.name))
                 sb.appendLine("```")
                 sb.appendLine(snippet)
                 sb.appendLine("```")
             } else {
-                sb.appendLine("[Прикреплённый файл: ${file.name}]")
+                sb.appendLine(s.aiAttachedFileHeader(file.name))
             }
         } else {
-            sb.appendLine("[Прикреплённый файл: ${file.name} (${file.mimeType ?: "binary"})]")
+            sb.appendLine(s.aiAttachedBinaryHeader(file.name, file.mimeType ?: "binary"))
         }
     }
     return sb.toString().trim()

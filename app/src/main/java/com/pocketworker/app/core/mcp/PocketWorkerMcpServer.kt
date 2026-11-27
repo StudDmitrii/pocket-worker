@@ -1,8 +1,10 @@
 package com.pocketworker.app.core.mcp
 
 import com.pocketworker.app.core.git.GitEngine
+import com.pocketworker.app.core.git.GitOAuthManager
 import com.pocketworker.app.core.git.ProjectFileManager
 import com.pocketworker.app.core.git.RepoGroupDiscoveryService
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
 import com.pocketworker.app.ui.ai.AiLocationContext
@@ -28,17 +30,18 @@ class PocketWorkerMcpServer(
     private val currentLocationProvider: () -> AiLocationContext = { AiLocationContext.AllProjects },
     private val confirmFileEditsProvider: () -> Boolean = { true },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine
+    syntaxCheckEngine: SyntaxCheckEngine = NoOpSyntaxCheckEngine,
+    oauthManager: GitOAuthManager? = null
 ) {
     private val resolver = McpWorkspaceResolver(projectRegistry)
     private val toolsByName: LinkedHashMap<String, McpTool> = LinkedHashMap()
 
     init {
         val allTools = buildList {
-            addAll(createWorkspaceTools(projectRegistry, gitEngine, credentialStore, groupDiscoveryService, resolver))
+            addAll(createWorkspaceTools(projectRegistry, gitEngine, credentialStore, groupDiscoveryService, resolver, oauthManager))
             addAll(createFileSystemTools(projectRegistry, fileManager, gitEngine, resolver))
-            add(VirtualGitCommandTool(fileManager, gitEngine, credentialStore, resolver))
-            addAll(createCheckTools(fileManager, gitEngine, credentialStore, resolver, syntaxCheckEngine))
+            add(VirtualGitCommandTool(fileManager, gitEngine, credentialStore, resolver, oauthManager))
+            addAll(createCheckTools(fileManager, gitEngine, credentialStore, resolver, syntaxCheckEngine, oauthManager))
         }
         allTools.forEach { tool ->
             require(!toolsByName.containsKey(tool.definition.name)) {
@@ -81,8 +84,9 @@ class PocketWorkerMcpServer(
         }
 
         if (requiresApproval) {
+            val s = AppLocale.current
             val summary = runCatching { tool.buildConfirmationSummary(arguments) }
-                .getOrDefault("Выполнить $name")
+                .getOrDefault(s.mcpConfirmRun(name))
             val request = McpConfirmationRequest(
                 toolName = name,
                 tier = tier,
@@ -94,9 +98,9 @@ class PocketWorkerMcpServer(
                     ok = false,
                     error = McpErrorPayload(
                         errorCode = McpErrorCodes.CONFIRMATION_REQUIRED,
-                        message = "Требуется подтверждение пользователя: $summary",
+                        message = "User confirmation required: $summary",
                         recoverableByAgent = false,
-                        userMessageHint = "Для этого действия необходимо явное подтверждение пользователя."
+                        userMessageHint = s.mcpHintConfirmationRequired
                     ),
                     requiresConfirmation = request
                 )
@@ -105,9 +109,9 @@ class PocketWorkerMcpServer(
             if (!approved) {
                 return McpToolResult.error(
                     errorCode = McpErrorCodes.USER_REJECTED,
-                    message = "Пользователь отклонил выполнение операции: $summary",
+                    message = "User rejected operation: $summary",
                     recoverableByAgent = false,
-                    userMessageHint = "Операция отменена пользователем."
+                    userMessageHint = s.mcpHintCancelledByUser
                 )
             }
         }
@@ -123,15 +127,16 @@ class PocketWorkerMcpServer(
             } catch (ex: IllegalArgumentException) {
                 McpToolResult.error(
                     errorCode = McpErrorCodes.INVALID_ARGUMENTS,
-                    message = ex.message ?: "Некорректные аргументы инструмента '$name'.",
+                    message = ex.message ?: "Invalid arguments for tool '$name'.",
                     recoverableByAgent = true
                 )
             } catch (ex: Throwable) {
+                val detail = ex.localizedMessage ?: ex.javaClass.simpleName
                 McpToolResult.error(
                     errorCode = McpErrorCodes.INTERNAL_ERROR,
                     message = ex.localizedMessage ?: ex.message ?: ex.javaClass.simpleName,
                     recoverableByAgent = false,
-                    userMessageHint = "Внутренняя ошибка при выполнении '$name': ${ex.localizedMessage ?: ex.javaClass.simpleName}"
+                    userMessageHint = AppLocale.current.mcpHintInternalError(name, detail)
                 )
             }
         }

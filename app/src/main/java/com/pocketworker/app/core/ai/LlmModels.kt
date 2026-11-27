@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.mcp.McpToolDefinition
 import com.pocketworker.app.core.storage.AiProvider
 import kotlinx.coroutines.currentCoroutineContext
@@ -203,36 +204,35 @@ fun buildAgentSystemPrompt(
 }
 
 internal fun formatLlmException(provider: AiProvider, error: Throwable): Pair<String, Int?> {
+    val s = AppLocale.current
     val providerLabel = provider.displayName
     return when (error) {
         is LlmHttpException -> {
             val apiMsg = extractApiErrorMessage(error.responseBody)
             val human = when (error.statusCode) {
-                401 -> "Неверный API-ключ для $providerLabel (401). Проверьте ключ в «Настройки → Агент»."
-                403 -> "Доступ запрещён (403) для $providerLabel. Проверьте права ключа или доступ к выбранной модели."
-                404 -> "Модель не найдена или недоступна для вашего аккаунта $providerLabel (404)." +
-                    (apiMsg?.let { " $it" } ?: "")
-                407 -> "Прокси-сервер требует авторизацию (407). Проверьте логин и пароль в адресе прокси."
-                429 -> "Превышен лимит запросов или квота $providerLabel (429)." +
-                    (apiMsg?.let { " $it" } ?: "")
-                in 500..599 -> "Сервер $providerLabel временно недоступен (${error.statusCode}). Попробуйте позже."
-                else -> "Ошибка $providerLabel (HTTP ${error.statusCode}): ${apiMsg ?: error.responseBody.take(240)}"
+                401 -> s.llmErrHttp401(providerLabel)
+                403 -> s.llmErrHttp403(providerLabel)
+                404 -> s.llmErrHttp404(providerLabel, apiMsg.orEmpty())
+                407 -> s.llmErrHttp407
+                429 -> s.llmErrHttp429(providerLabel, apiMsg.orEmpty())
+                in 500..599 -> s.llmErrHttp5xx(providerLabel, error.statusCode)
+                else -> s.llmErrHttpGeneric(providerLabel, error.statusCode, apiMsg ?: error.responseBody.take(240))
             }
             human to error.statusCode
         }
 
         is UnknownHostException ->
-            "Нет подключения к серверу $providerLabel или хосту прокси. Проверьте интернет и настройки прокси." to null
+            s.llmErrUnknownHost(providerLabel) to null
 
         is SocketTimeoutException ->
-            "Превышено время ожидания ответа от $providerLabel. Проверьте сеть или прокси." to null
+            s.llmErrTimeout(providerLabel) to null
 
         else -> {
             val raw = error.localizedMessage ?: error.javaClass.simpleName
             val msg = if ("407" in raw || "proxy" in raw.lowercase()) {
-                "Ошибка прокси-сервера при подключении к $providerLabel. Проверьте адрес, порт и логин/пароль прокси."
+                s.llmErrProxyConnect(providerLabel)
             } else {
-                "Ошибка соединения с $providerLabel: $raw"
+                s.llmErrGenericConnect(providerLabel, raw)
             }
             msg to null
         }
@@ -298,6 +298,14 @@ internal fun sanitizeConversationHistory(messages: List<LlmMessage>): List<LlmMe
     return out
 }
 
+/**
+ * Null-safe string reader for [JSONObject].
+ * On Android's `org.json.JSONObject`, `optString(key, "")` returns the literal `"null"` when the
+ * JSON value is explicitly `null`; checking [JSONObject.isNull] prevents `"null"` corruption.
+ */
+internal fun JSONObject.optNonNullString(key: String, fallback: String = ""): String =
+    if (has(key) && !isNull(key)) optString(key, fallback) else fallback
+
 internal fun extractApiErrorMessage(rawBody: String): String? {
     val trimmed = rawBody.trim()
     if (trimmed.isEmpty()) return null
@@ -306,7 +314,7 @@ internal fun extractApiErrorMessage(rawBody: String): String? {
             trimmed.startsWith("[") -> JSONArray(trimmed).optJSONObject(0) ?: return null
             else -> JSONObject(trimmed)
         }
-        json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
-            ?: json.optString("message").takeIf { it.isNotBlank() }
+        json.optJSONObject("error")?.optNonNullString("message")?.takeIf { it.isNotBlank() }
+            ?: json.optNonNullString("message").takeIf { it.isNotBlank() }
     }.getOrNull()
 }

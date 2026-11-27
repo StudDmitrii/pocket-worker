@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.pocketworker.app.core.i18n.LocalAppStrings
 import com.pocketworker.app.ui.theme.GitSemanticColors
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
 import com.pocketworker.app.ui.workspace.CodeLanguage
@@ -328,6 +329,7 @@ private fun MarkdownCodeBlockCard(
     isDark: Boolean,
     appendCursor: Boolean
 ) {
+    val s = LocalAppStrings.current
     val clipboardManager = LocalClipboardManager.current
     var copied by remember(block.code) { mutableStateOf(false) }
 
@@ -349,12 +351,12 @@ private fun MarkdownCodeBlockCard(
     val detectedLanguage = remember(rawLang) {
         CodeSyntaxHighlighter.detectLanguageByFence(rawLang)
     }
-    val languageLabel = remember(rawLang, detectedLanguage, isDiff) {
+    val languageLabel = remember(rawLang, detectedLanguage, isDiff, s) {
         when {
             isDiff -> "Diff"
             detectedLanguage != CodeLanguage.PLAIN_TEXT -> detectedLanguage.displayName
             rawLang.isNotEmpty() -> rawLang
-            else -> "Код"
+            else -> s.mdCodeDefaultLabel
         }
     }
 
@@ -428,12 +430,12 @@ private fun MarkdownCodeBlockCard(
                         }
                         Icon(
                             imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                            contentDescription = "Копировать код",
+                            contentDescription = s.mdCopyCodeDesc,
                             tint = copyTint,
                             modifier = Modifier.size(13.dp)
                         )
                         Text(
-                            text = if (copied) "Скопировано" else "Копировать",
+                            text = if (copied) s.commonCopied else s.commonCopy,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium,
                             color = copyTint
@@ -499,6 +501,7 @@ private fun MarkdownListView(
     uriHandler: UriHandler,
     appendCursor: Boolean
 ) {
+    val s = LocalAppStrings.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(5.dp)
@@ -555,7 +558,7 @@ private fun MarkdownListView(
                                 } else {
                                     Icons.Rounded.CheckBoxOutlineBlank
                                 },
-                                contentDescription = if (marker.checked) "Выполнено" else "Не выполнено",
+                                contentDescription = if (marker.checked) s.commonDone else s.commonNotDone,
                                 tint = if (marker.checked) {
                                     if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
                                 } else {
@@ -594,6 +597,7 @@ private fun MarkdownBlockquoteView(
     uriHandler: UriHandler,
     appendCursor: Boolean
 ) {
+    val s = LocalAppStrings.current
     val accentColor = when (block.callout) {
         MdCalloutType.NOTE -> MaterialTheme.colorScheme.primary
         MdCalloutType.TIP -> if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
@@ -648,7 +652,7 @@ private fun MarkdownBlockquoteView(
                             modifier = Modifier.size(15.dp)
                         )
                         Text(
-                            text = block.callout.title,
+                            text = block.callout.localizedTitle(s),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = accentColor

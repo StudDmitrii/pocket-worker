@@ -48,7 +48,8 @@ class WorkspaceFileReloadTest {
             gitEngine = harness.gitEngine,
             fileManager = harness.fileManager,
             registry = harness.registry,
-            credentialStore = harness.credentialStore
+            credentialStore = harness.credentialStore,
+            ioDispatcher = testDispatcher
         )
 
         // Wait for initial loadAll IO coroutine

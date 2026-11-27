@@ -321,4 +321,68 @@ class JGitEngineTest {
         assertFalse(File(dir, "untracked.txt").exists())
         assertTrue(File(dir, "ignored.log").exists())
     }
+
+    @Test
+    fun `fetchCurrentBranch updates remote tracking ref and exposes behindCount`() {
+        val bareDir = File(tempRoot, "fetch-remote.git")
+        Git.init().setDirectory(bareDir).setBare(true).call().close()
+
+        val seedDir = File(tempRoot, "fetch-seed")
+        engine.initProject(
+            targetDir = seedDir,
+            initialBranch = "dev",
+            initGit = true,
+            createReadmeAndCommit = true,
+            projectName = "FetchSeed",
+            remoteUrl = bareDir.toURI().toString()
+        )
+        engine.push(seedDir, remoteName = "origin", branchName = "dev")
+
+        val clone1Dir = File(tempRoot, "fetch-clone1")
+        engine.cloneRepository(url = bareDir.toURI().toString(), targetDir = clone1Dir, branch = "dev")
+
+        val clone2Dir = File(tempRoot, "fetch-clone2")
+        engine.cloneRepository(url = bareDir.toURI().toString(), targetDir = clone2Dir, branch = "dev")
+
+        // Push 2 new commits from clone2
+        File(clone2Dir, "first.txt").writeText("one\n")
+        engine.stageAll(clone2Dir)
+        engine.commit(clone2Dir, "Commit 1", "Dev", "dev@example.com")
+        File(clone2Dir, "second.txt").writeText("two\n")
+        engine.stageAll(clone2Dir)
+        engine.commit(clone2Dir, "Commit 2", "Dev", "dev@example.com")
+        engine.push(clone2Dir, remoteName = "origin")
+
+        // Before fetch, clone1 is not yet aware of the 2 remote commits
+        assertEquals(0, engine.getStatus(clone1Dir).behindCount)
+
+        // Targeted current-branch fetch discovers both remote commits
+        val fetched = engine.fetchCurrentBranch(clone1Dir)
+        assertTrue(fetched)
+        val afterStatus = engine.getStatus(clone1Dir)
+        assertEquals(2, afterStatus.behindCount)
+        assertEquals(0, afterStatus.aheadCount)
+    }
+
+    @Test
+    fun `getHeadFileContent returns committed text for tracked file and null for untracked`() {
+        val dir = File(tempRoot, "head-content-test")
+        engine.initProject(
+            targetDir = dir,
+            initialBranch = "main",
+            initGit = true,
+            createReadmeAndCommit = true,
+            projectName = "HeadContent"
+        )
+
+        val committedReadme = File(dir, "README.md").readText()
+        // Modify README.md locally without committing
+        File(dir, "README.md").writeText("$committedReadme\nnew uncommitted line\n")
+        // Create an untracked file
+        File(dir, "draft.kt").writeText("fun draft() = Unit\n")
+
+        assertEquals(committedReadme, engine.getHeadFileContent(dir, "README.md"))
+        assertEquals(null, engine.getHeadFileContent(dir, "draft.kt"))
+        assertEquals(null, engine.getHeadFileContent(dir, "missing.kt"))
+    }
 }

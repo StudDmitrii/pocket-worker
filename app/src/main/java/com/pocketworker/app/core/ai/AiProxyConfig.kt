@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.ai
 
+import com.pocketworker.app.core.i18n.AppLocale
 import java.net.Authenticator
 import java.net.InetSocketAddress
 import java.net.PasswordAuthentication
@@ -46,9 +47,10 @@ sealed interface ProxyParseResult {
  * - `1.2.3.4:8080`
  */
 fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
+    val s = AppLocale.current
     val trimmed = rawInput.trim()
     if (trimmed.isEmpty()) {
-        return ProxyParseResult.Invalid("Укажите адрес прокси, например http://user:password@ip:port")
+        return ProxyParseResult.Invalid(s.proxyErrEmpty)
     }
 
     val schemeSepIdx = trimmed.indexOf("://")
@@ -61,12 +63,12 @@ fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
     val proxyType = when (scheme) {
         "http", "https" -> Proxy.Type.HTTP
         "socks", "socks5", "socks5h", "socks4" -> Proxy.Type.SOCKS
-        else -> return ProxyParseResult.Invalid("Неподдерживаемая схема прокси «$scheme». Используйте http:// или socks5://.")
+        else -> return ProxyParseResult.Invalid(s.proxyErrUnsupportedScheme(scheme))
     }
 
     val authority = restWithPath.substringBefore('/').substringBefore('?').substringBefore('#').trim()
     if (authority.isEmpty()) {
-        return ProxyParseResult.Invalid("Не удалось определить адрес хоста прокси.")
+        return ProxyParseResult.Invalid(s.proxyErrNoHost)
     }
 
     // Use lastIndexOf('@') so passwords containing an unencoded '@' still parse cleanly
@@ -75,7 +77,7 @@ fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
     val hostPortRaw = if (atIdx >= 0) authority.substring(atIdx + 1) else authority
 
     if (hostPortRaw.isBlank()) {
-        return ProxyParseResult.Invalid("Не указан IP или домен прокси-сервера.")
+        return ProxyParseResult.Invalid(s.proxyErrNoIpOrDomain)
     }
 
     val defaultPort = when (scheme) {
@@ -88,13 +90,13 @@ fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
         // IPv6 literal: [::1]:8080 or [::1]
         val closeBracket = hostPortRaw.indexOf(']')
         if (closeBracket < 0) {
-            return ProxyParseResult.Invalid("Некорректный IPv6-адрес прокси.")
+            return ProxyParseResult.Invalid(s.proxyErrInvalidIpv6)
         }
         val h = hostPortRaw.substring(1, closeBracket)
         val after = hostPortRaw.substring(closeBracket + 1)
         val p = if (after.startsWith(":")) {
             after.substring(1).toIntOrNull()
-                ?: return ProxyParseResult.Invalid("Некорректный порт прокси.")
+                ?: return ProxyParseResult.Invalid(s.proxyErrInvalidPort)
         } else {
             defaultPort
         }
@@ -104,7 +106,7 @@ fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
         if (colonIdx > 0) {
             val h = hostPortRaw.substring(0, colonIdx).trim()
             val p = hostPortRaw.substring(colonIdx + 1).trim().toIntOrNull()
-                ?: return ProxyParseResult.Invalid("Некорректный порт прокси.")
+                ?: return ProxyParseResult.Invalid(s.proxyErrInvalidPort)
             h to p
         } else {
             hostPortRaw.trim() to defaultPort
@@ -112,10 +114,10 @@ fun parseAiProxyUrl(rawInput: String): ProxyParseResult {
     }
 
     if (host.isEmpty() || host.any { it.isWhitespace() }) {
-        return ProxyParseResult.Invalid("Некорректный хост прокси-сервера.")
+        return ProxyParseResult.Invalid(s.proxyErrInvalidHost)
     }
     if (port !in 1..65535) {
-        return ProxyParseResult.Invalid("Порт прокси должен быть в диапазоне 1..65535.")
+        return ProxyParseResult.Invalid(s.proxyErrPortRange)
     }
 
     var username: String? = null

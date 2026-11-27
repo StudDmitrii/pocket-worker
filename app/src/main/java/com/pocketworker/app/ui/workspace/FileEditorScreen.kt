@@ -60,21 +60,34 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketworker.app.core.i18n.LocalAppStrings
+import com.pocketworker.app.ui.common.TopNotificationHost
+import com.pocketworker.app.ui.common.TopNotificationState
 import com.pocketworker.app.ui.common.formatFileSize
+import com.pocketworker.app.ui.theme.GitSemanticColors
 import com.pocketworker.app.ui.theme.LocalIsDarkTheme
+import org.eclipse.jgit.diff.HistogramDiff
+import org.eclipse.jgit.diff.RawText
+import org.eclipse.jgit.diff.RawTextComparator
+import java.nio.charset.StandardCharsets
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -101,6 +114,74 @@ internal fun buildLineNumbersText(lineCount: Int): String {
         for (lineNum in 1..safeCount) {
             if (lineNum > 1) append('\n')
             append(lineNum)
+        }
+    }
+}
+
+/**
+ * Computes 1-based line numbers in [currentContent] that represent uncommitted Git additions
+ * relative to [headContent] (new or modified lines not yet committed to `HEAD`).
+ */
+internal fun computeGitAddedLineNumbers(
+    isGitRepo: Boolean,
+    headContent: String?,
+    currentContent: String
+): Set<Int> {
+    if (!isGitRepo) return emptySet()
+    val normCurrent = currentContent.replace("\r\n", "\n").replace("\r", "\n")
+    if (normCurrent.isEmpty()) return emptySet()
+
+    val currForRaw = if (normCurrent.endsWith('\n')) normCurrent else "$normCurrent\n"
+    val currRaw = RawText(currForRaw.toByteArray(StandardCharsets.UTF_8))
+
+    if (headContent == null) {
+        val total = currRaw.size()
+        return if (total <= 0) emptySet() else (1..total).toSet()
+    }
+
+    val normHead = headContent.replace("\r\n", "\n").replace("\r", "\n")
+    if (normHead == normCurrent) return emptySet()
+    val headForRaw = when {
+        normHead.isEmpty() -> ""
+        normHead.endsWith('\n') -> normHead
+        else -> "$normHead\n"
+    }
+    val headRaw = RawText(headForRaw.toByteArray(StandardCharsets.UTF_8))
+
+    val edits = HistogramDiff().diff(RawTextComparator.DEFAULT, headRaw, currRaw)
+    if (edits.isEmpty()) return emptySet()
+
+    val added = HashSet<Int>()
+    for (edit in edits) {
+        if (edit.endB > edit.beginB) {
+            for (lineIdx in edit.beginB until edit.endB) {
+                added.add(lineIdx + 1)
+            }
+        }
+    }
+    return added
+}
+
+private fun buildLineNumbersAnnotated(
+    lineCount: Int,
+    addedLines: Set<Int>,
+    addedNumberColor: Color
+): AnnotatedString {
+    val safeCount = lineCount.coerceAtLeast(1)
+    if (addedLines.isEmpty()) {
+        return AnnotatedString(buildLineNumbersText(safeCount))
+    }
+    return buildAnnotatedString {
+        val addedStyle = SpanStyle(color = addedNumberColor, fontWeight = FontWeight.SemiBold)
+        for (lineNum in 1..safeCount) {
+            if (lineNum > 1) append('\n')
+            if (lineNum in addedLines) {
+                withStyle(addedStyle) {
+                    append(lineNum.toString())
+                }
+            } else {
+                append(lineNum.toString())
+            }
         }
     }
 }
@@ -163,12 +244,14 @@ private fun Modifier.pinchToZoom(
 @Composable
 fun FileEditorScreen(
     editorState: FileEditorState,
+    notificationState: TopNotificationState? = null,
     onContentChange: (String) -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val isDark = LocalIsDarkTheme.current
+    val s = LocalAppStrings.current
     val language = remember(editorState.relativePath) {
         CodeSyntaxHighlighter.detectLanguage(editorState.relativePath)
     }
@@ -204,7 +287,7 @@ fun FileEditorScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = handleBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = s.commonBack)
                     }
                 },
                 title = {
@@ -236,7 +319,7 @@ fun FileEditorScreen(
                             Text(
                                 text = buildString {
                                     append(editorState.relativePath)
-                                    if (editorState.isModifiedInEditor) append(" • изменён")
+                                    if (editorState.isModifiedInEditor) append(s.editorModifiedSuffix)
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -251,7 +334,7 @@ fun FileEditorScreen(
                         IconButton(onClick = { isEditing = !isEditing }) {
                             Icon(
                                 imageVector = if (isEditing) Icons.Rounded.Visibility else Icons.Rounded.Edit,
-                                contentDescription = if (isEditing) "Режим просмотра" else "Редактировать"
+                                contentDescription = if (isEditing) s.editorViewModeDesc else s.editorEditModeDesc
                             )
                         }
                         if (editorState.isModifiedInEditor) {
@@ -259,24 +342,25 @@ fun FileEditorScreen(
                                 onClick = onSave,
                                 enabled = !editorState.isSaving
                             ) {
-                                Icon(Icons.Rounded.Save, contentDescription = "Сохранить")
+                                Icon(Icons.Rounded.Save, contentDescription = s.commonSave)
                             }
                         }
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                        Icon(Icons.Rounded.Settings, contentDescription = s.commonSettings)
                     }
                 }
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .imePadding()
         ) {
-            HorizontalDivider(color = palette.gutterDivider)
+            Column(modifier = Modifier.fillMaxSize()) {
+                HorizontalDivider(color = palette.gutterDivider)
 
             BoxWithConstraints(
                 modifier = Modifier
@@ -292,7 +376,7 @@ fun FileEditorScreen(
                 when {
                     editorState.isBinary -> {
                         Text(
-                            text = "Бинарный файл (${formatFileSize(editorState.sizeBytes)}) не поддерживается текстовым редактором.",
+                            text = s.editorBinaryUnsupported(formatFileSize(editorState.sizeBytes)),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -303,7 +387,7 @@ fun FileEditorScreen(
 
                     editorState.isTooLarge -> {
                         Text(
-                            text = "Файл слишком большой (${formatFileSize(editorState.sizeBytes)}) для открытия в редакторе.",
+                            text = s.editorTooLarge(formatFileSize(editorState.sizeBytes)),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -319,11 +403,31 @@ fun FileEditorScreen(
                         val lineCount = remember(normalizedViewText) {
                             normalizedViewText.count { it == '\n' } + 1
                         }
-                        val lineNumbersText = remember(lineCount) {
-                            buildLineNumbersText(lineCount)
+                        val gitAddedLines = remember(
+                            editorState.isGitRepo,
+                            editorState.isGitIgnored,
+                            editorState.headContent,
+                            normalizedViewText
+                        ) {
+                            computeGitAddedLineNumbers(
+                                isGitRepo = editorState.isGitRepo && !editorState.isGitIgnored,
+                                headContent = editorState.headContent,
+                                currentContent = normalizedViewText
+                            )
                         }
+                        val addedGutterColor = if (isDark) GitSemanticColors.AddedDark else GitSemanticColors.AddedLight
+                        val addedGutterBg = if (isDark) {
+                            Color(0xFF22C55E).copy(alpha = 0.22f)
+                        } else {
+                            Color(0xFF16A34A).copy(alpha = 0.16f)
+                        }
+                        val addedGutterBar = if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
+                        val lineNumbersAnnotated = remember(lineCount, gitAddedLines, addedGutterColor) {
+                            buildLineNumbersAnnotated(lineCount, gitAddedLines, addedGutterColor)
+                        }
+                        var gutterTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                         val gutterDigits = lineCount.toString().length.coerceAtLeast(3)
-                        val gutterWidth = ((gutterDigits * 8.5f * zoomScale) + 18f).dp
+                        val gutterWidth = ((gutterDigits * 8.5f * zoomScale) + 20f).dp
                         val codeMinWidth = (viewportWidth - gutterWidth).coerceAtLeast(0.dp)
 
                         val lineHeightStyle = remember {
@@ -373,15 +477,46 @@ fun FileEditorScreen(
                                     .verticalScroll(vScroll)
                                     .heightIn(min = viewportHeight)
                             ) {
-                                // Pinned left line-number gutter (single Text for exact line alignment at any zoom)
-                                Text(
-                                    text = lineNumbersText,
-                                    style = gutterTextStyle,
-                                    softWrap = false,
+                                // Pinned left line-number gutter (single Text for exact line alignment at any zoom;
+                                // uncommitted Git added lines are highlighted in green ONLY on this left gutter)
+                                Box(
                                     modifier = Modifier
                                         .width(gutterWidth)
-                                        .padding(horizontal = 8.dp, vertical = 12.dp)
-                                )
+                                        .drawBehind {
+                                            val layout = gutterTextLayout ?: return@drawBehind
+                                            if (gitAddedLines.isEmpty()) return@drawBehind
+                                            val topPadPx = 12.dp.toPx()
+                                            val barWidthPx = 3.dp.toPx()
+                                            for (lineNum in gitAddedLines) {
+                                                val lineIdx = lineNum - 1
+                                                if (lineIdx in 0 until layout.lineCount) {
+                                                    val top = topPadPx + layout.getLineTop(lineIdx)
+                                                    val bottom = topPadPx + layout.getLineBottom(lineIdx)
+                                                    val h = (bottom - top).coerceAtLeast(1f)
+                                                    drawRect(
+                                                        color = addedGutterBg,
+                                                        topLeft = Offset(0f, top),
+                                                        size = Size(size.width, h)
+                                                    )
+                                                    drawRect(
+                                                        color = addedGutterBar,
+                                                        topLeft = Offset(size.width - barWidthPx, top),
+                                                        size = Size(barWidthPx, h)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                ) {
+                                    Text(
+                                        text = lineNumbersAnnotated,
+                                        style = gutterTextStyle,
+                                        softWrap = false,
+                                        onTextLayout = { gutterTextLayout = it },
+                                        modifier = Modifier
+                                            .width(gutterWidth)
+                                            .padding(horizontal = 8.dp, vertical = 12.dp)
+                                    )
+                                }
 
                                 if (isEditing) {
                                     val visualTransformation = remember(language, isDark) {
@@ -447,7 +582,7 @@ fun FileEditorScreen(
                                 modifier = Modifier.clickable { zoomScale = 1f }
                             ) {
                                 Text(
-                                    text = "${formatEditorZoomPercent(zoomScale)}  •  сброс",
+                                    text = s.editorZoomReset(formatEditorZoomPercent(zoomScale)),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Medium,
@@ -458,21 +593,29 @@ fun FileEditorScreen(
                     }
                 }
             }
+            }
+
+            if (notificationState != null) {
+                TopNotificationHost(
+                    state = notificationState,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
         }
     }
 
     if (showUnsavedDialog) {
         AlertDialog(
             onDismissRequest = { showUnsavedDialog = false },
-            title = { Text("Несохранённые изменения") },
-            text = { Text("Сохранить изменения в файле «${editorState.relativePath}» перед выходом?") },
+            title = { Text(s.editorUnsavedTitle) },
+            text = { Text(s.editorUnsavedMessage(editorState.relativePath)) },
             confirmButton = {
                 Button(onClick = {
                     showUnsavedDialog = false
                     onSave()
                     onClose()
                 }) {
-                    Text("Сохранить")
+                    Text(s.commonSave)
                 }
             },
             dismissButton = {
@@ -480,7 +623,7 @@ fun FileEditorScreen(
                     showUnsavedDialog = false
                     onClose()
                 }) {
-                    Text("Выйти без сохранения")
+                    Text(s.editorExitWithoutSaving)
                 }
             }
         )

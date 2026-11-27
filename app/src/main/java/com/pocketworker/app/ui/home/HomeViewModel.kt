@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.pocketworker.app.core.git.GitCredentials
 import com.pocketworker.app.core.git.GitEngine
 import com.pocketworker.app.core.git.ProjectSummary
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.core.storage.CredentialStore
 import com.pocketworker.app.core.storage.ProjectRegistry
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.withContext
 
 data class HomeUiState(
     val projects: List<ProjectSummary> = emptyList(),
+    val newlyAddedProjectIds: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val isCreatingProject: Boolean = false,
     val createProjectError: String? = null,
@@ -60,13 +62,22 @@ class HomeViewModel(
                 val defaultCreds = credentialStore.getDefaultCredentials()
                 summaries to defaultCreds
             }
+            val pendingNew = registry.getPendingNewProjectIds()
             _uiState.update {
                 it.copy(
                     projects = result.first,
+                    newlyAddedProjectIds = pendingNew,
                     defaultCredentials = result.second,
                     isLoading = false
                 )
             }
+        }
+    }
+
+    fun consumeNewlyAddedProject(projectId: String) {
+        registry.markProjectSeen(projectId)
+        _uiState.update {
+            it.copy(newlyAddedProjectIds = it.newlyAddedProjectIds - projectId)
         }
     }
 
@@ -77,7 +88,7 @@ class HomeViewModel(
     ) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) {
-            _uiState.update { it.copy(createProjectError = "Введите название проекта") }
+            _uiState.update { it.copy(createProjectError = AppLocale.current.homeErrEnterProjectName) }
             return
         }
 
@@ -93,7 +104,7 @@ class HomeViewModel(
                     it.copy(
                         isCreatingProject = false,
                         createProjectError = null,
-                        infoMessage = "Проект «${created.name}» создан"
+                        infoMessage = AppLocale.current.homeInfoProjectCreated(created.name)
                     )
                 }
                 refreshProjects()
@@ -102,7 +113,7 @@ class HomeViewModel(
                 _uiState.update {
                     it.copy(
                         isCreatingProject = false,
-                        createProjectError = err.localizedMessage ?: "Не удалось создать проект"
+                        createProjectError = err.localizedMessage ?: AppLocale.current.homeErrCreateProject
                     )
                 }
             }
@@ -116,14 +127,14 @@ class HomeViewModel(
     fun updateProject(projectId: String, name: String, description: String) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) {
-            _uiState.update { it.copy(errorMessage = "Название проекта не может быть пустым") }
+            _uiState.update { it.copy(errorMessage = AppLocale.current.homeErrEmptyProjectName) }
             return
         }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 registry.updateProject(projectId, cleanName, description)
             }
-            _uiState.update { it.copy(infoMessage = "Проект обновлён") }
+            _uiState.update { it.copy(infoMessage = AppLocale.current.homeInfoProjectUpdated) }
             refreshProjects()
         }
     }
@@ -135,7 +146,7 @@ class HomeViewModel(
                 credentialStore.removeProjectCredentials(projectId)
                 removedRepoIds.forEach { credentialStore.removeRepoCredentials(it) }
             }
-            _uiState.update { it.copy(infoMessage = "Проект удалён") }
+            _uiState.update { it.copy(infoMessage = AppLocale.current.homeInfoProjectDeleted) }
             refreshProjects()
         }
     }
@@ -148,10 +159,11 @@ class HomeViewModel(
                 credentialStore.saveDefaultCredentials(GitCredentials(username.trim(), token.trim()))
             }
             val updated = credentialStore.getDefaultCredentials()
+            val s = AppLocale.current
             _uiState.update {
                 it.copy(
                     defaultCredentials = updated,
-                    infoMessage = if (token.isBlank()) "Токен по умолчанию очищен" else "Токен по умолчанию сохранён"
+                    infoMessage = if (token.isBlank()) s.homeInfoDefaultTokenCleared else s.homeInfoDefaultTokenSaved
                 )
             }
         }

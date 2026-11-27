@@ -86,6 +86,17 @@ interface GitEngine {
         credentials: GitCredentials? = null
     ): String
 
+    /**
+     * Fetches only the currently checked-out branch from its tracking (or primary) remote
+     * so ahead/behind commit counts stay up to date like in VS Code.
+     * Returns `true` when fetch succeeded, or `false` if skipped (unborn/detached/no remote).
+     */
+    fun fetchCurrentBranch(
+        repoDir: File,
+        remoteName: String? = null,
+        credentials: GitCredentials? = null
+    ): Boolean = false
+
     fun pull(
         repoDir: File,
         remoteName: String = "origin",
@@ -147,6 +158,12 @@ interface GitEngine {
     fun getWorkingDiff(repoDir: File, relativePath: String, staged: Boolean): String
 
     fun getCommitFileDiff(repoDir: File, commitId: String, relativePath: String): String
+
+    /**
+     * Reads the UTF-8 text content of [relativePath] at `HEAD`, or returns `null` when
+     * the repository is unborn, not a Git repository, or the file does not exist in `HEAD`.
+     */
+    fun getHeadFileContent(repoDir: File, relativePath: String): String? = null
 
     fun getAuthorConfig(repoDir: File): Pair<String, String>
 

@@ -1,10 +1,29 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun resolveOAuthConfig(propKey: String, envKey: String): String {
+    val value = (findProperty(propKey) as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: localProps.getProperty(propKey)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv(envKey)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: ""
+    return value.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
+val githubOAuthClientId = resolveOAuthConfig("github.oauth.clientId", "GITHUB_OAUTH_CLIENT_ID")
+val gitlabOAuthClientId = resolveOAuthConfig("gitlab.oauth.clientId", "GITLAB_OAUTH_CLIENT_ID")
 
 android {
     namespace = "com.pocketworker.app"
@@ -16,6 +35,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        buildConfigField("String", "GITHUB_OAUTH_CLIENT_ID", "\"$githubOAuthClientId\"")
+        buildConfigField("String", "GITLAB_OAUTH_CLIENT_ID", "\"$gitlabOAuthClientId\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -41,6 +63,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

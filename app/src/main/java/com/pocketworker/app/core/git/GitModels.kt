@@ -43,7 +43,8 @@ data class RepoCardInfo(
 
 data class GitCredentials(
     val username: String,
-    val tokenOrPassword: String
+    val tokenOrPassword: String,
+    val isOAuthToken: Boolean = false
 )
 
 data class CloneProgress(

@@ -1,5 +1,6 @@
 package com.pocketworker.app.core.git
 
+import com.pocketworker.app.core.i18n.AppLocale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -122,7 +123,7 @@ class HttpRepoGroupDiscoveryService(
             "/orgs/$encodedOwner/repos?per_page=$PAGE_SIZE&type=all&sort=updated"
         } else {
             val ownerResp = httpClient.get("$apiBase/users/$encodedOwner", headers)
-            ensureSuccess(ownerResp, "Профиль или организация GitHub «${parsed.owner}» не найдены")
+            ensureSuccess(ownerResp, AppLocale.current.groupDiscoveryGithubOwnerNotFound(parsed.owner))
             val ownerType = runCatching { JSONObject(ownerResp.body).optString("type", "") }.getOrDefault("")
             if (ownerType.equals("Organization", ignoreCase = true)) {
                 "/orgs/$encodedOwner/repos?per_page=$PAGE_SIZE&type=all&sort=updated"
@@ -145,7 +146,7 @@ class HttpRepoGroupDiscoveryService(
         val collected = mutableListOf<DiscoveredRepo>()
         for (page in 1..MAX_PAGES) {
             val resp = httpClient.get("$apiBase$endpointPath&page=$page", headers)
-            ensureSuccess(resp, "Не удалось получить список репозиториев GitHub для «${parsed.owner}»")
+            ensureSuccess(resp, AppLocale.current.groupDiscoveryGithubReposFailed(parsed.owner))
             val array = JSONArray(resp.body)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
@@ -178,7 +179,11 @@ class HttpRepoGroupDiscoveryService(
             put("Accept", "application/json")
             put("User-Agent", "PocketWorker-Android")
             if (token != null) {
-                put("PRIVATE-TOKEN", token)
+                if (credentials.isOAuthToken) {
+                    put("Authorization", "Bearer $token")
+                } else {
+                    put("PRIVATE-TOKEN", token)
+                }
             }
         }
 
@@ -198,7 +203,7 @@ class HttpRepoGroupDiscoveryService(
                 activeBaseQuery = userQuery
                 resp = httpClient.get("$activeBaseQuery&page=$page", headers)
             }
-            ensureSuccess(resp, "Группа или пользователь GitLab «${parsed.groupPath}» не найдены")
+            ensureSuccess(resp, AppLocale.current.groupDiscoveryGitlabGroupNotFound(parsed.groupPath))
 
             val array = JSONArray(resp.body)
             for (i in 0 until array.length()) {
@@ -232,15 +237,12 @@ class HttpRepoGroupDiscoveryService(
             JSONObject(resp.body).optString("message", "")
         }.getOrDefault("")
         val detail = if (apiMessage.isNotBlank()) " ($apiMessage)" else ""
+        val s = AppLocale.current
         when (resp.statusCode) {
-            401 -> throw IllegalStateException(
-                "Ошибка авторизации (401): включите авторизацию и укажите действительный токен (PAT)$detail"
-            )
-            403 -> throw IllegalStateException(
-                "Доступ запрещён (403): проверьте права токена или лимит запросов API$detail"
-            )
+            401 -> throw IllegalStateException(s.groupDiscoveryAuth401(detail))
+            403 -> throw IllegalStateException(s.groupDiscoveryForbidden403(detail))
             404 -> throw IllegalStateException("$notFoundMessage (404)$detail")
-            else -> throw IllegalStateException("Ошибка сервера (${resp.statusCode})$detail")
+            else -> throw IllegalStateException(s.groupDiscoveryServerError(resp.statusCode, detail))
         }
     }
 
@@ -253,17 +255,18 @@ class HttpRepoGroupDiscoveryService(
         private const val MAX_PAGES = 5
 
         fun parseGroupUrl(rawUrl: String): ParsedGroupUrl {
+            val s = AppLocale.current
             val trimmed = rawUrl.trim()
-            require(trimmed.isNotEmpty()) { "Укажите ссылку на группу или организацию" }
+            require(trimmed.isNotEmpty()) { s.groupDiscoveryEmptyUrl }
 
             val normalized = if ("://" in trimmed) trimmed else "https://$trimmed"
             val uri = runCatching { URI(normalized) }.getOrElse {
-                throw IllegalArgumentException("Некорректная ссылка: $trimmed")
+                throw IllegalArgumentException(s.groupDiscoveryInvalidUrl(trimmed))
             }
 
             val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: "https"
             val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("Не удалось определить домен в ссылке")
+                ?: throw IllegalArgumentException(s.groupDiscoveryNoDomain)
             val portPart = if (uri.port != -1) ":${uri.port}" else ""
             val hostBaseUrl = "$scheme://$host$portPart"
 
@@ -272,7 +275,7 @@ class HttpRepoGroupDiscoveryService(
                 .filter { it.isNotBlank() }
 
             if (rawSegments.isEmpty()) {
-                throw IllegalArgumentException("Укажите путь к группе или организации в ссылке")
+                throw IllegalArgumentException(s.groupDiscoveryNoPath)
             }
 
             if (host == "github.com" || host == "www.github.com") {
@@ -283,11 +286,9 @@ class HttpRepoGroupDiscoveryService(
                         rawSegments[1] to false
                     rawSegments.size == 1 ->
                         rawSegments[0].removeSuffix(".git") to false
-                    else -> throw IllegalArgumentException(
-                        "Для GitHub укажите ссылку на организацию или профиль (например, https://github.com/my-org), а не на конкретный репозиторий"
-                    )
+                    else -> throw IllegalArgumentException(s.groupDiscoveryGithubMustBeOrg)
                 }
-                require(owner.isNotBlank()) { "Не удалось определить имя организации или пользователя GitHub" }
+                require(owner.isNotBlank()) { s.groupDiscoveryGithubOwnerBlank }
                 return ParsedGroupUrl.GitHub(
                     rawUrl = trimmed,
                     hostBaseUrl = hostBaseUrl,
@@ -311,7 +312,7 @@ class HttpRepoGroupDiscoveryService(
                 .filter { it.isNotBlank() }
 
             val groupPath = beforeDash.joinToString("/")
-            require(groupPath.isNotEmpty()) { "Не удалось определить группу GitLab в ссылке" }
+            require(groupPath.isNotEmpty()) { s.groupDiscoveryGitlabPathBlank }
 
             return ParsedGroupUrl.GitLab(
                 rawUrl = trimmed,

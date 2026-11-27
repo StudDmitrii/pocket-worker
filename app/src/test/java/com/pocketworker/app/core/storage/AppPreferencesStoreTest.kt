@@ -3,6 +3,8 @@ package com.pocketworker.app.core.storage
 import com.pocketworker.app.core.git.AndroidSystemReader
 import com.pocketworker.app.core.git.JGitEngine
 import com.pocketworker.app.core.git.RepoEntry
+import com.pocketworker.app.core.i18n.AppLanguage
+import com.pocketworker.app.core.i18n.AppLocale
 import com.pocketworker.app.ui.settings.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -37,14 +39,16 @@ class AppPreferencesStoreTest {
 
     @After
     fun tearDown() {
+        AppLocale.setLanguage(AppLanguage.SYSTEM)
         Dispatchers.resetMain()
         tempRoot.deleteRecursively()
     }
 
     @Test
-    fun `preferences store updates theme mode and animated background flag`() {
+    fun `preferences store updates theme mode, language, and animated background flag`() {
         val store = InMemoryAppPreferencesStore()
         assertEquals(AppThemeMode.SYSTEM, store.preferences.value.themeMode)
+        assertEquals(AppLanguage.SYSTEM, store.preferences.value.language)
         assertTrue(store.preferences.value.animatedBackgroundEnabled)
 
         store.setThemeMode(AppThemeMode.DARK)
@@ -52,6 +56,13 @@ class AppPreferencesStoreTest {
 
         store.setThemeMode(AppThemeMode.LIGHT)
         assertEquals(AppThemeMode.LIGHT, store.preferences.value.themeMode)
+
+        store.setLanguage(AppLanguage.EN)
+        assertEquals(AppLanguage.EN, store.preferences.value.language)
+        store.setLanguage(AppLanguage.RU)
+        assertEquals(AppLanguage.RU, store.preferences.value.language)
+        store.setLanguage(AppLanguage.SYSTEM)
+        assertEquals(AppLanguage.SYSTEM, store.preferences.value.language)
 
         store.setAnimatedBackgroundEnabled(false)
         assertFalse(store.preferences.value.animatedBackgroundEnabled)
@@ -83,12 +94,14 @@ class AppPreferencesStoreTest {
         assertEquals("Mobile App", vm.uiState.value.projectName)
 
         vm.setThemeMode(AppThemeMode.DARK)
+        vm.setLanguage(AppLanguage.EN)
         vm.setAnimatedBackgroundEnabled(false)
         vm.saveDefaultCredentials("gituser", "pat-123")
         vm.saveProjectCredentials("projuser", "pat-456")
         advanceUntilIdle()
 
         assertEquals(AppThemeMode.DARK, prefsStore.preferences.value.themeMode)
+        assertEquals(AppLanguage.EN, prefsStore.preferences.value.language)
         assertFalse(prefsStore.preferences.value.animatedBackgroundEnabled)
         assertNotNull(credStore.getDefaultCredentials())
         assertEquals("pat-123", credStore.getDefaultCredentials()?.tokenOrPassword)
@@ -123,6 +136,20 @@ class AppPreferencesStoreTest {
             assertEquals(p.defaultModel, p.resolveModelOrDefault("unknown-legacy-model"))
             assertEquals(p.models.last().id, p.resolveModelOrDefault(p.models.last().id))
         }
+        assertEquals(
+            listOf(
+                "particle-ai/particle-1:free",
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
+                "google/gemma-4-31b-it:free",
+                "inclusionai/ling-3.2-flash:free",
+                "baidu/ernie-5.5-flash-preview:free"
+            ),
+            AiProvider.OPENROUTER.models.map { it.id }
+        )
+        assertEquals(
+            "particle-ai/particle-1:free",
+            AiProvider.OPENROUTER.resolveModelOrDefault("google/gemini-4-neon")
+        )
         assertEquals(
             "baidu/ernie-5.5-flash-preview:free",
             AiProvider.OPENROUTER.resolveModelOrDefault("baidu/ernie-5.5-flash-preview:free")
@@ -274,9 +301,13 @@ class AppPreferencesStoreTest {
         )
         advanceUntilIdle()
 
+        // Initially no custom global author is configured in ~/.gitconfig
+        assertFalse(vm.uiState.value.hasCustomGlobalAuthor)
+
         // 1. Default global author applies when neither project nor repo overrides
         vm.saveGlobalAuthor("Global User", "global@example.com")
         advanceUntilIdle()
+        assertTrue(vm.uiState.value.hasCustomGlobalAuthor)
         assertFalse(vm.uiState.value.repoHasCustomAuthor)
         assertEquals("Global User", vm.uiState.value.repoAuthorName)
         assertEquals("global@example.com", vm.uiState.value.repoAuthorEmail)
@@ -317,5 +348,10 @@ class AppPreferencesStoreTest {
         assertNull(vm.uiState.value.projectAuthorEmail)
         assertEquals("Global User", vm.uiState.value.repoAuthorName)
         assertEquals("global@example.com", vm.uiState.value.repoAuthorEmail)
+
+        // 6. Clearing global author marks default author as not set again
+        vm.clearGlobalAuthor()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.hasCustomGlobalAuthor)
     }
 }
